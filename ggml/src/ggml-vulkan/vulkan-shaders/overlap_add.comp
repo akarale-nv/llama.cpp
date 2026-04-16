@@ -1,0 +1,60 @@
+#version 450
+
+#include "types.glsl"
+
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};  // src0: time_frames [num_frames, win_length, batch]
+layout (binding = 1) readonly buffer B {B_TYPE data_b[];};  // src1: window [win_length]
+layout (binding = 2) writeonly buffer D {D_TYPE data_d[];}; // dst:  output [output_length, batch]
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint32_t num_frames;
+    uint32_t win_length;
+    uint32_t batch_size;
+    uint32_t output_length;
+    int32_t  hop_length;
+    int32_t  center_padding;
+} p;
+
+void main() {
+    const uint32_t out_idx   = gl_GlobalInvocationID.x;
+    const uint32_t batch_idx = gl_GlobalInvocationID.y;
+
+    if (out_idx >= p.output_length || batch_idx >= p.batch_size) {
+        return;
+    }
+
+    const int32_t padded_pos = int32_t(out_idx) + p.center_padding;
+
+    // Determine the range of frames that overlap with this output sample
+    int32_t first_frame = max(0,
+        (padded_pos - p.center_padding - int32_t(p.win_length) + 1 + p.hop_length - 1) / p.hop_length);
+    int32_t last_frame = min(int32_t(p.num_frames) - 1,
+        (padded_pos - p.center_padding) / p.hop_length);
+
+    float signal_sum = 0.0;
+    float window_sum = 0.0;
+
+    for (int32_t frame_idx = first_frame; frame_idx <= last_frame; frame_idx++) {
+        const int32_t frame_start     = frame_idx * p.hop_length + p.center_padding;
+        const int32_t offset_in_frame = padded_pos - frame_start;
+
+        if (offset_in_frame >= 0 && offset_in_frame < int32_t(p.win_length)) {
+            // GGML layout for [num_frames, win_length, batch]:
+            // element [frame, sample, batch] = frame + sample*num_frames + batch*num_frames*win_length
+            const uint32_t frame_element_idx =
+                uint32_t(frame_idx) +
+                uint32_t(offset_in_frame) * p.num_frames +
+                batch_idx * p.num_frames * p.win_length;
+
+            float window_val = float(data_b[offset_in_frame]);
+            signal_sum += float(data_a[frame_element_idx]) * window_val;
+            window_sum += window_val;
+        }
+    }
+
+    const float eps = 1e-11;
+    float result = (window_sum > eps) ? (signal_sum / window_sum) : signal_sum;
+    data_d[batch_idx * p.output_length + out_idx] = D_TYPE(result);
+}

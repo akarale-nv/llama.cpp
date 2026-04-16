@@ -98,6 +98,10 @@ llm_build_gpt2::llm_build_gpt2(const llama_model & model, const llm_graph_params
 
     cur = build_lora_mm(model.output, cur);
 
+    if (model.output_b != nullptr) {
+        cur = ggml_add(ctx0, cur, model.output_b);
+    }
+
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 

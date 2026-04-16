@@ -1055,9 +1055,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+    "OVERLAP_ADD",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1165,9 +1166,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+    "overlap_add(x)",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4453,12 +4455,13 @@ struct ggml_tensor * ggml_conv_1d(
         int                   s0,
         int                   p0,
         int                   d0) {
-    struct ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, 0, p0, 0, d0, 0, false, GGML_TYPE_F16); // [N, OL, IC * K]
+    struct ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, 0, p0, 0, d0, 0, false, GGML_TYPE_F32); // [N, OL, IC * K]
+    struct ggml_tensor * a_f32 = (a->type == GGML_TYPE_F32) ? a : ggml_cast(ctx, a, GGML_TYPE_F32);
 
     struct ggml_tensor * result =
         ggml_mul_mat(ctx,
                 ggml_reshape_2d(ctx, im2col, im2col->ne[0], (im2col->ne[2] * im2col->ne[1])), // [N, OL, IC * K] => [N*OL, IC * K]
-                ggml_reshape_2d(ctx, a, (a->ne[0] * a->ne[1]), a->ne[2]));                    // [OC，IC, K] => [OC, IC * K]
+                ggml_reshape_2d(ctx, a_f32, (a_f32->ne[0] * a_f32->ne[1]), a_f32->ne[2]));   // [OC，IC, K] => [OC, IC * K]
 
     result = ggml_reshape_3d(ctx, result, im2col->ne[1], a->ne[2], im2col->ne[2]); // [N, OC, OL]
 
@@ -4524,11 +4527,10 @@ GGML_API struct ggml_tensor * ggml_conv_transpose_1d(
     GGML_ASSERT(a->ne[2] == b->ne[1]);
     GGML_ASSERT(a->ne[3] == 1);
 
-    GGML_ASSERT(p0 == 0);
     GGML_ASSERT(d0 == 1);
 
     const int64_t ne[4] = {
-        ggml_calc_conv_transpose_1d_output_size(b->ne[0], a->ne[0], s0, 0 /*p0*/, 1 /*d0*/),
+        ggml_calc_conv_transpose_1d_output_size(b->ne[0], a->ne[0], s0, p0, 1 /*d0*/),
         a->ne[1], b->ne[2], 1,
     };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
@@ -5285,6 +5287,43 @@ struct ggml_tensor * ggml_arange(
     ggml_set_op_params_f32(result, 2, step);
 
     result->op = GGML_OP_ARANGE;
+
+    return result;
+}
+
+// ggml_overlap_add
+
+struct ggml_tensor * ggml_overlap_add(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * time_frames,
+        struct ggml_tensor  * window,
+        int                   hop_length,
+        int                   center_padding) {
+
+    GGML_ASSERT(ggml_n_dims(time_frames) >= 2);
+    GGML_ASSERT(ggml_n_dims(window) >= 1);
+    GGML_ASSERT(hop_length > 0);
+    GGML_ASSERT(center_padding >= 0);
+
+    const int64_t num_frames = time_frames->ne[0];
+    const int64_t win_length = time_frames->ne[1];
+    const int64_t batch_size = time_frames->ne[2];
+
+    GGML_ASSERT(window->ne[0] == win_length);
+
+    const int64_t output_length = center_padding > 0
+        ? (num_frames - 1) * hop_length
+        : (num_frames - 1) * hop_length + win_length;
+
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, time_frames->type,
+                                                      output_length, batch_size);
+
+    int32_t params[] = { hop_length, center_padding };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_OVERLAP_ADD;
+    result->src[0] = time_frames;
+    result->src[1] = window;
 
     return result;
 }

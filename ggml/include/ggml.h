@@ -574,6 +574,7 @@ extern "C" {
         GGML_OP_OPT_STEP_SGD,
 
         GGML_OP_GLU,
+        GGML_OP_OVERLAP_ADD,
 
         GGML_OP_COUNT,
     };
@@ -2314,6 +2315,13 @@ extern "C" {
             float                 start,
             float                 stop,
             float                 step);
+
+    GGML_API struct ggml_tensor * ggml_overlap_add(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * time_frames,     // unwindowed frames [num_frames, win_length, batch]
+            struct ggml_tensor  * window,          // window function [win_length]
+            int                   hop_length,
+            int                   center_padding);
 
     // q:    [n_embd_k, n_batch, n_head,    ne3 ]
     // k:    [n_embd_k, n_kv,    n_head_kv, ne3 ]

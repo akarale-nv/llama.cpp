@@ -60,6 +60,7 @@
 #include "ggml-cuda/solve_tri.cuh"
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/cumsum.cuh"
+#include "ggml-cuda/overlap-add.cuh"
 #include "ggml-cuda/fill.cuh"
 #include "ggml.h"
 
@@ -2656,6 +2657,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_ARANGE:
             ggml_cuda_op_arange(ctx, dst);
             break;
+        case GGML_OP_OVERLAP_ADD:
+            ggml_cuda_op_overlap_add(ctx, dst);
+            break;
         case GGML_OP_TIMESTEP_EMBEDDING:
             ggml_cuda_op_timestep_embedding(ctx, dst);
             break;
@@ -4916,7 +4920,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_CONCAT:
             {
                 ggml_type src0_type = op->src[0]->type;
-                return src0_type != GGML_TYPE_I32 && src0_type != GGML_TYPE_I16;
+                return src0_type != GGML_TYPE_I16;
             } break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
@@ -5041,6 +5045,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_OPT_STEP_SGD:
         case GGML_OP_FILL:
         case GGML_OP_CUMSUM:
+        case GGML_OP_OVERLAP_ADD:
         case GGML_OP_TRI:
         case GGML_OP_DIAG:
         case GGML_OP_SOLVE_TRI:

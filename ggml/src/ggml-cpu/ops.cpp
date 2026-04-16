@@ -7897,6 +7897,119 @@ void ggml_compute_forward_roll(
     }
 }
 
+// ggml_compute_forward_overlap_add
+
+static void ggml_compute_forward_overlap_add_f32(
+        const ggml_compute_params * params,
+              ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];  // time_frames (unwindowed)
+    const ggml_tensor * src1 = dst->src[1];  // window [win_length]
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+
+    if (params->ith != 0) {
+        return;
+    }
+
+    const int32_t * opts         = (const int32_t *) dst->op_params;
+    const int       hop_length   = opts[0];
+    const int       center_padding = opts[1];
+
+    const int64_t num_frames   = src0->ne[0];
+    const int64_t win_length   = src0->ne[1];
+    const int64_t batch_size   = src0->ne[2];
+    const int64_t output_length = dst->ne[0];
+
+    const float * frames_data = (const float *) src0->data;
+    const float * window_data = (const float *) src1->data;
+    float       * output_data = (float *)       dst->data;
+
+    memset(output_data, 0, output_length * batch_size * sizeof(float));
+
+    // For center-padded output: work in a padded buffer then trim
+    const int64_t padded_length = output_length + 2 * center_padding;
+    float * padded_buffer = nullptr;
+    bool use_padding = (center_padding > 0);
+
+    if (use_padding) {
+        padded_buffer = (float *) calloc(padded_length * batch_size, sizeof(float));
+        if (!padded_buffer) {
+            fprintf(stderr, "ggml_overlap_add: failed to allocate padded buffer\n");
+            return;
+        }
+    }
+
+    float * work_buffer  = use_padding ? padded_buffer : output_data;
+    const int64_t work_length = use_padding ? padded_length : output_length;
+
+    float * window_sum = (float *) calloc(work_length * batch_size, sizeof(float));
+    if (!window_sum) {
+        fprintf(stderr, "ggml_overlap_add: failed to allocate window_sum buffer\n");
+        if (padded_buffer) free(padded_buffer);
+        return;
+    }
+
+    for (int64_t frame_idx = 0; frame_idx < num_frames; frame_idx++) {
+        const int64_t start_pos = frame_idx * hop_length + center_padding;
+        if (start_pos + win_length > work_length) {
+            continue;
+        }
+        for (int64_t batch_idx = 0; batch_idx < batch_size; batch_idx++) {
+            float * dst_ptr     = work_buffer  + start_pos + batch_idx * work_length;
+            float * win_sum_ptr = window_sum   + start_pos + batch_idx * work_length;
+            for (int64_t i = 0; i < win_length; i++) {
+                const int64_t element_idx =
+                    (frame_idx * src0->nb[0] +
+                     i         * src0->nb[1] +
+                     batch_idx  * src0->nb[2]) / sizeof(float);
+                float sample          = frames_data[element_idx];
+                float windowed_sample = sample * window_data[i];
+                dst_ptr[i]     += windowed_sample;
+                win_sum_ptr[i] += window_data[i];
+            }
+        }
+    }
+
+    const float eps = 1e-11f;
+    for (int64_t batch_idx = 0; batch_idx < batch_size; batch_idx++) {
+        float * sig_ptr = work_buffer + batch_idx * work_length;
+        float * win_ptr = window_sum  + batch_idx * work_length;
+        for (int64_t i = 0; i < work_length; i++) {
+            if (win_ptr[i] > eps) {
+                sig_ptr[i] /= win_ptr[i];
+            }
+        }
+    }
+
+    free(window_sum);
+
+    if (use_padding) {
+        for (int64_t batch_idx = 0; batch_idx < batch_size; batch_idx++) {
+            const float * src_ptr = padded_buffer + center_padding + batch_idx * padded_length;
+            float       * dst_ptr = output_data   + batch_idx * output_length;
+            memcpy(dst_ptr, src_ptr, output_length * sizeof(float));
+        }
+        free(padded_buffer);
+    }
+}
+
+void ggml_compute_forward_overlap_add(
+        const ggml_compute_params * params,
+              ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            ggml_compute_forward_overlap_add_f32(params, dst);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
 // ggml_compute_forward_arange
 
 static void ggml_compute_forward_arange_f32(

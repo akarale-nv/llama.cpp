@@ -726,8 +726,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_concat_f32, pipeline_concat_f16, pipeline_concat_i32;
     vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bicubic_f32, pipeline_upscale_bilinear_antialias_f32;
     vk_pipeline pipeline_scale_f32;
-    vk_pipeline pipeline_sqr_f32;
-    vk_pipeline pipeline_sqrt_f32;
+    vk_pipeline pipeline_sqr[2];
+    vk_pipeline pipeline_sqrt[2];
     vk_pipeline pipeline_sin_f32;
     vk_pipeline pipeline_cos_f32;
     vk_pipeline pipeline_log[2];
@@ -823,6 +823,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_im2col_3d_f32, pipeline_im2col_3d_f32_f16;
     vk_pipeline pipeline_timestep_embedding_f32;
     vk_pipeline pipeline_conv_transpose_1d_f32;
+    vk_pipeline pipeline_overlap_add_f32;
     vk_pipeline pipeline_pool2d_f32;
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
@@ -1436,6 +1437,15 @@ struct vk_op_conv_transpose_1d_push_constants {
     uint32_t nb1;
 
     int32_t s0;
+};
+
+struct vk_op_overlap_add_push_constants {
+    uint32_t num_frames;
+    uint32_t win_length;
+    uint32_t batch_size;
+    uint32_t output_length;
+    int32_t  hop_length;
+    int32_t  center_padding;
 };
 
 struct vk_op_pool2d_push_constants {
@@ -4381,8 +4391,10 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_scale_f32, "scale_f32", scale_f32_len, scale_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
-    ggml_vk_create_pipeline(device, device->pipeline_sqr_f32, "sqr_f32", sqr_f32_len, sqr_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_sqrt_f32, "sqrt_f32", sqrt_f32_len, sqrt_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_sqr[0], "sqr_f32", sqr_f32_len, sqr_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_sqr[1], "sqr_f16", sqr_f16_len, sqr_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_sqrt[0], "sqrt_f32", sqrt_f32_len, sqrt_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_sqrt[1], "sqrt_f16", sqrt_f16_len, sqrt_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_sin_f32, "sin_f32", sin_f32_len, sin_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cos_f32, "cos_f32", cos_f32_len, cos_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
@@ -4590,6 +4602,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_timestep_embedding_f32, "timestep_embedding_f32", timestep_embedding_f32_len, timestep_embedding_f32_data, "main", 2, sizeof(vk_op_timestep_embedding_push_constants), {256, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_conv_transpose_1d_f32, "conv_transpose_1d_f32", conv_transpose_1d_f32_len, conv_transpose_1d_f32_data, "main", 3, sizeof(vk_op_conv_transpose_1d_push_constants), {1, 1, 1}, {}, 1);
+
+    ggml_vk_create_pipeline(device, device->pipeline_overlap_add_f32, "overlap_add_f32", overlap_add_f32_len, overlap_add_f32_data, "main", 3, sizeof(vk_op_overlap_add_push_constants), {256, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_pool2d_f32, "pool2d_f32", pool2d_f32_len, pool2d_f32_data, "main", 2, sizeof(vk_op_pool2d_push_constants), {512, 1, 1}, {}, 1);
 
@@ -9225,13 +9239,15 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_SQR:
-        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_sqr_f32;
+        if (src0->type == dst->type &&
+            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
+            return ctx->device->pipeline_sqr[dst->type == GGML_TYPE_F16];
         }
         return nullptr;
     case GGML_OP_SQRT:
-        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_sqrt_f32;
+        if (src0->type == dst->type &&
+            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
+            return ctx->device->pipeline_sqrt[dst->type == GGML_TYPE_F16];
         }
         return nullptr;
     case GGML_OP_SIN:
@@ -9557,6 +9573,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_CONV_TRANSPOSE_1D:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_conv_transpose_1d_f32;
+        }
+        return nullptr;
+    case GGML_OP_OVERLAP_ADD:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_overlap_add_f32;
         }
         return nullptr;
     case GGML_OP_POOL_2D:
@@ -9954,6 +9975,10 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_TRANSPOSE_1D:
         {
             elements = {uint32_t(src0->ne[1]), 1, 1}; // parallelize in {Cout, 1, 1}
+        } break;
+    case GGML_OP_OVERLAP_ADD:
+        {
+            elements = {uint32_t(dst->ne[0]), uint32_t(dst->ne[1]), 1}; // {output_length, batch_size, 1}
         } break;
     case GGML_OP_POOL_2D:
         {
@@ -11701,6 +11726,26 @@ static void ggml_vk_conv_transpose_1d(ggml_backend_vk_context * ctx, vk_context&
     ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_CONV_TRANSPOSE_1D, std::move(p));
 }
 
+static void ggml_vk_overlap_add(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+
+    const int32_t * opts          = (const int32_t *) dst->op_params;
+    const int       hop_length    = opts[0];
+    const int       center_padding = opts[1];
+
+    vk_op_overlap_add_push_constants p{};
+    p.num_frames     = static_cast<uint32_t>(src0->ne[0]);
+    p.win_length     = static_cast<uint32_t>(src0->ne[1]);
+    p.batch_size     = static_cast<uint32_t>(src0->ne[2]);
+    p.output_length  = static_cast<uint32_t>(dst->ne[0]);
+    p.hop_length     = hop_length;
+    p.center_padding = center_padding;
+
+    ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_OVERLAP_ADD, std::move(p));
+}
+
 static void ggml_vk_pool_2d(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     uint32_t op = static_cast<uint32_t>(dst->op_params[0]);
     const int32_t k1 = dst->op_params[1];
@@ -13144,6 +13189,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_CONV_TRANSPOSE_1D:
         ggml_vk_conv_transpose_1d(ctx, compute_ctx, src0, src1, node);
+
+        break;
+    case GGML_OP_OVERLAP_ADD:
+        ggml_vk_overlap_add(ctx, compute_ctx, src0, src1, node);
 
         break;
     case GGML_OP_POOL_2D:
@@ -15494,6 +15543,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
+            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                   op->type == op->src[0]->type;
         case GGML_OP_SIN:
         case GGML_OP_COS:
         case GGML_OP_CLAMP:
@@ -15672,6 +15723,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_SSM_CONV:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_TRANSPOSE_1D:
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
+        case GGML_OP_OVERLAP_ADD:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_TRANSPOSE_2D:
@@ -16501,6 +16554,10 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             const int32_t p0 = tensor->op_params[1];
             const int32_t d0 = tensor->op_params[2];
             tensor_clone = ggml_conv_transpose_1d(ggml_ctx, src_clone[0], src_clone[1], s0, p0, d0);
+        } else if (tensor->op == GGML_OP_OVERLAP_ADD) {
+            const int32_t hop_length      = tensor->op_params[0];
+            const int32_t center_padding  = tensor->op_params[1];
+            tensor_clone = ggml_overlap_add(ggml_ctx, src_clone[0], src_clone[1], hop_length, center_padding);
         } else if (tensor->op == GGML_OP_POOL_2D) {
             enum ggml_op_pool op = static_cast<ggml_op_pool>(tensor->op_params[0]);
             const int32_t k0 = tensor->op_params[1];
