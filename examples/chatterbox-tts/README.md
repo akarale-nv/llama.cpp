@@ -17,27 +17,32 @@ Both stages run on CPU, CUDA, Vulkan, or Metal via ggml.
 pip install gguf safetensors transformers torch
 ```
 
-### 2. Obtain model files
+### 2. Download the model
 
-The Chatterbox Turbo pipeline uses two separate model checkpoints:
+Download from [ResembleAI/chatterbox-turbo](https://huggingface.co/ResembleAI/chatterbox-turbo):
 
-- **T3 checkpoint** -- contains the GPT-2 backbone (`tfmr.*`), text/speech embeddings (`text_emb.weight`, `speech_emb.weight`), positional embeddings, and speech head (`speech_head.weight`/`bias`)
-- **S3Gen checkpoint** -- contains the flow-matching vocoder (`flow.*`), HiFT decoder (`mel2wav.*`), and speaker encoder (`speaker_encoder.*`)
+```bash
+git clone https://huggingface.co/ResembleAI/chatterbox-turbo
+```
 
-You also need the tokenizer files alongside the T3 checkpoint:
-- `tokenizer.json` (or `vocab.json` + `merges.txt`)
-- `tokenizer_config.json`
+Key files in the repo:
+
+| File | Description |
+|------|-------------|
+| `t3_turbo_v1.safetensors` | T3 checkpoint (GPT-2 backbone + embeddings + speech head) |
+| `s3gen.safetensors` | S3Gen vocoder (flow matching + HiFT decoder) |
+| `vocab.json` + `merges.txt` | GPT-2 BPE tokenizer |
+| `tokenizer_config.json` | Tokenizer configuration |
+| `conds.pt` | Speaker conditioning data |
+| `ve.safetensors` | Voice encoder (for future runtime speaker embedding) |
 
 ### 3. Convert to GGUF
 
-Convert both models in a single command:
+Point the converter at the model folder -- it auto-discovers the T3 and S3Gen checkpoints:
 
 ```bash
 python examples/chatterbox-tts/convert_chatterbox_to_gguf.py all \
-    path/to/t3_model.safetensors \
-    path/to/s3gen_model.safetensors \
-    --model-dir path/to/tokenizer_dir/ \
-    --quantize f16
+    chatterbox-turbo/
 ```
 
 Output (three GGUF files):
@@ -75,9 +80,9 @@ The JSON file contains base64-encoded fields (each with `bin_data` and `shape` k
 ./build/bin/llama-chatterbox \
     -m t3_embeddings.gguf \
     --model-llama chatterbox_llama_backbone_tts_f16.gguf \
-    --prompt "Hello, how are you doing today?" \
+    --prompt "So I was thinking [chuckle] maybe we should just go for it." \
     --cond-emb speaker.json \
-    --s3gen s3gen_f16.gguf \
+    --s3gen S3Gen-266M-F32.gguf \
     --output output.wav
 ```
 
@@ -87,7 +92,7 @@ The JSON file contains base64-encoded fields (each with `bin_data` and `shape` k
 ./build/bin/llama-chatterbox \
     -m t3_embeddings.gguf \
     --model-llama chatterbox_llama_backbone_tts_f16.gguf \
-    --prompt "Hello, how are you doing today?" \
+    --prompt "So I was thinking [chuckle] maybe we should just go for it." \
     --cond-emb speaker.json \
     --tokens-out tokens.txt
 ```
@@ -97,7 +102,7 @@ The JSON file contains base64-encoded fields (each with `bin_data` and `shape` k
 ```bash
 ./build/bin/llama-chatterbox \
     --cond-emb speaker.json \
-    --s3gen s3gen_f16.gguf \
+    --s3gen S3Gen-266M-F32.gguf \
     --tokens-in 1234,5678,9012,3456 \
     --output output.wav
 ```
@@ -130,15 +135,15 @@ All conversions are handled by a single script with subcommands.
 
 ### convert_chatterbox_to_gguf.py all
 
-Converts both T3 and S3Gen checkpoints in one command, producing three GGUF files.
+Auto-discovers T3 and S3Gen checkpoints in a model directory and converts both, producing three GGUF files. Looks for `t3_turbo*.safetensors` and `s3gen*.safetensors` by default.
 
 ```
-python convert_chatterbox_to_gguf.py all <t3_model> <s3gen_model> [options]
+python convert_chatterbox_to_gguf.py all <model_dir> [options]
 
-  t3_model                    Path to T3 .safetensors or .pth checkpoint
-  s3gen_model                 Path to S3Gen .safetensors or .pth checkpoint
+  model_dir                   Path to model directory (e.g. chatterbox-turbo/)
 
-  --model-dir DIR             Directory with tokenizer files (default: parent of t3_model)
+  --t3-model PATH             Override T3 checkpoint path (default: auto-detect)
+  --s3gen-model PATH          Override S3Gen checkpoint path (default: auto-detect)
   --quantize TYPE             Quantization for both models (default: f16 for T3, f32 for S3Gen)
   --s3gen-quantize TYPE       Override quantization for S3Gen only
   --output-embeddings PATH    Output embeddings GGUF (default: t3_embeddings.gguf)

@@ -11,6 +11,8 @@ Subcommands:
             - S3Gen GGUF        (default: S3Gen-<params>-<quant>.gguf)
 
 Usage:
+  python convert_chatterbox_to_gguf.py all chatterbox-turbo/ --quantize f16
+
   python convert_chatterbox_to_gguf.py t3 path/to/t3_model.safetensors \\
       --model-dir path/to/tokenizer_dir/ --quantize f16
 
@@ -570,11 +572,6 @@ def convert_s3gen_to_gguf(
         ftype = 1
     fout.add_file_type(ftype)
 
-    # mmproj-compatible metadata
-    fout.add_string("clip.projector_type", "s3gen")
-    fout.add_bool("clip.has_audio_encoder", False)
-    fout.add_bool("clip.has_vision_encoder", False)
-
     fout.add_uint32("s3gen.sample_rate", 24_000)
     fout.add_uint32("s3gen.mel_channels", 80)
     fout.add_uint32("s3gen.token_mel_ratio", 2)
@@ -764,12 +761,41 @@ def cmd_s3gen(args):
         sys.exit(1)
 
 
+def find_checkpoint(model_dir: Path, prefixes: list[str], label: str) -> Path:
+    """Find a .safetensors or .pth file matching one of the given prefixes."""
+    for prefix in prefixes:
+        for ext in (".safetensors", ".pth", ".pt"):
+            candidate = model_dir / f"{prefix}{ext}"
+            if candidate.exists():
+                return candidate
+    # Fallback: glob for partial match
+    for prefix in prefixes:
+        for ext in (".safetensors", ".pth", ".pt"):
+            matches = sorted(model_dir.glob(f"{prefix}*{ext}"))
+            if matches:
+                return matches[0]
+    print(f"Error: could not find {label} checkpoint in {model_dir}")
+    print(f"  Looked for files starting with: {', '.join(prefixes)}")
+    sys.exit(1)
+
+
 def cmd_all(args):
-    """Run both T3 and S3Gen conversions in one shot."""
+    """Run both T3 and S3Gen conversions from a model directory."""
+    model_dir = Path(args.model_dir)
+    if not model_dir.is_dir():
+        print(f"Error: {model_dir} is not a directory")
+        sys.exit(1)
+
+    t3_path = args.t3_model or str(find_checkpoint(model_dir, ["t3_turbo", "t3"], "T3"))
+    s3gen_path = args.s3gen_model or str(find_checkpoint(model_dir, ["s3gen_meanflow"], "S3Gen"))
+
+    print(f"T3 checkpoint:    {t3_path}")
+    print(f"S3Gen checkpoint: {s3gen_path}")
+
     # Reuse cmd_t3 and cmd_s3gen by building compatible args namespaces
     class T3Args:
-        model_path = args.t3_model
-        model_dir = args.model_dir
+        model_path = t3_path
+        model_dir = str(args.model_dir)
         output_embeddings = args.output_embeddings
         output_backbone = args.output_backbone
         quantize = args.quantize
@@ -777,7 +803,7 @@ def cmd_all(args):
     cmd_t3(T3Args())
 
     class S3Args:
-        model_path = args.s3gen_model
+        model_path = s3gen_path
         quantize = args.s3gen_quantize or args.quantize
         output = args.output_s3gen
     cmd_s3gen(S3Args())
@@ -794,13 +820,14 @@ def main():
 
     # --- all subcommand ---
     p_all = subparsers.add_parser("all",
-        help="Convert both T3 and S3Gen checkpoints in one command")
-    p_all.add_argument("t3_model",
-        help="Path to T3 .safetensors or .pth checkpoint")
-    p_all.add_argument("s3gen_model",
-        help="Path to S3Gen .safetensors or .pth checkpoint")
-    p_all.add_argument("--model-dir", default=None,
-        help="Directory with tokenizer files (default: parent of t3_model)")
+        help="Convert both T3 and S3Gen from a model directory")
+    p_all.add_argument("model_dir",
+        help="Path to model directory (e.g. chatterbox-turbo/). "
+             "Auto-discovers t3_turbo*.safetensors and s3gen*.safetensors")
+    p_all.add_argument("--t3-model", default=None,
+        help="Override T3 checkpoint path (default: auto-detect in model_dir)")
+    p_all.add_argument("--s3gen-model", default=None,
+        help="Override S3Gen checkpoint path (default: auto-detect in model_dir)")
     p_all.add_argument("--quantize", "-q", default=None,
         choices=["q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "f16", "f32"],
         help="Quantization type for both models (default: f16 for T3, f32 for S3Gen)")
