@@ -373,6 +373,7 @@ class MODEL_ARCH(IntEnum):
     BAICHUAN         = auto()
     GROK             = auto()
     GPT2             = auto()
+    CHATTERBOX_T3    = auto()
     GPTJ             = auto()
     GPTNEOX          = auto()
     MPT              = auto()
@@ -791,6 +792,196 @@ class MODEL_TENSOR(IntEnum):
     A_MM_HARD_EMB_NORM    = auto() # gemma3n
     A_MM_SOFT_EMB_NORM    = auto() # gemma3n
     A_MM_INP_PROJ         = auto() # gemma3n
+    A_MM_TEXT_EMBEDDING   = auto() # chatterbox
+    A_ENC_LSTM_IH         = auto() # chatterbox
+    A_ENC_LSTM_HH         = auto() # chatterbox
+    A_ENC_LSTM_PROJ       = auto() # chatterbox
+    A_ENC_FSMN_CONV       = auto() # chatterbox (s3tok)
+    A_ENC_FSQ_PROJ        = auto() # chatterbox (s3tok)
+    # chatterbox (CAMPPlus speaker encoder) — BatchNorm tensors are emitted
+    # post-fold as (gamma_fused, beta_fused) → (.weight, .bias).
+    A_CAMPPLUS_HEAD_BN1                  = auto()
+    A_CAMPPLUS_HEAD_BN2                  = auto()
+    A_CAMPPLUS_HEAD_CONV1                = auto()
+    A_CAMPPLUS_HEAD_CONV2                = auto()
+    A_CAMPPLUS_HEAD_BASIC_BN1            = auto()
+    A_CAMPPLUS_HEAD_BASIC_BN2            = auto()
+    A_CAMPPLUS_HEAD_BASIC_CONV1          = auto()
+    A_CAMPPLUS_HEAD_BASIC_CONV2          = auto()
+    A_CAMPPLUS_HEAD_BASIC_SHORTCUT_CONV  = auto()
+    A_CAMPPLUS_HEAD_BASIC_SHORTCUT_BN    = auto()
+    A_CAMPPLUS_XV_TDNN_LINEAR            = auto()
+    A_CAMPPLUS_XV_TDNN_BN                = auto()
+    A_CAMPPLUS_XV_TRANSIT_LINEAR         = auto()
+    A_CAMPPLUS_XV_TRANSIT_BN             = auto()
+    A_CAMPPLUS_XV_DENSE_LINEAR           = auto()
+    A_CAMPPLUS_XV_DENSE_BN               = auto() # affine=False BN
+    A_CAMPPLUS_XV_OUT_BN                 = auto()
+    A_CAMPPLUS_XV_BLOCK1_TDNN_LINEAR1    = auto()
+    A_CAMPPLUS_XV_BLOCK1_TDNN_BN1        = auto()
+    A_CAMPPLUS_XV_BLOCK1_TDNN_BN2        = auto()
+    A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_L1     = auto()
+    A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_L2     = auto()
+    A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_LOCAL  = auto()
+    A_CAMPPLUS_XV_BLOCK2_TDNN_LINEAR1    = auto()
+    A_CAMPPLUS_XV_BLOCK2_TDNN_BN1        = auto()
+    A_CAMPPLUS_XV_BLOCK2_TDNN_BN2        = auto()
+    A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_L1     = auto()
+    A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_L2     = auto()
+    A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_LOCAL  = auto()
+    A_CAMPPLUS_XV_BLOCK3_TDNN_LINEAR1    = auto()
+    A_CAMPPLUS_XV_BLOCK3_TDNN_BN1        = auto()
+    A_CAMPPLUS_XV_BLOCK3_TDNN_BN2        = auto()
+    A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_L1     = auto()
+    A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_L2     = auto()
+    A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_LOCAL  = auto()
+    # chatterbox (HiFT vocoder, "mel2wav.*"). Most Conv1d / ConvTranspose1d weights
+    # are stored under PyTorch's weight_norm parametrization as two tensors
+    # (original0 = magnitude, original1 = direction); the convert code fuses
+    # them into a single .weight per layer before emission. Snake activation
+    # alphas pass through directly (1-D learnable parameter per layer).
+    A_HIFT_CONV_PRE                  = auto()
+    A_HIFT_CONV_POST                 = auto()
+    A_HIFT_M_SOURCE_LINEAR           = auto()
+    A_HIFT_F0_CLASSIFIER             = auto()
+    A_HIFT_F0_CONDNET                = auto()  # 5 stacked Conv1ds; index compressed to 0..4
+    A_HIFT_UPS                       = auto()  # 3 ConvTranspose1d upsamplers
+    A_HIFT_SOURCE_DOWN               = auto()  # 3 plain Conv1d (no weight_norm)
+    # Regular resblocks (9 outer × {3 convs1, 3 convs2, 6 Snake alphas})
+    A_HIFT_RES_CONVS1_0              = auto()
+    A_HIFT_RES_CONVS1_1              = auto()
+    A_HIFT_RES_CONVS1_2              = auto()
+    A_HIFT_RES_CONVS2_0              = auto()
+    A_HIFT_RES_CONVS2_1              = auto()
+    A_HIFT_RES_CONVS2_2              = auto()
+    A_HIFT_RES_ACT1_0_ALPHA          = auto()
+    A_HIFT_RES_ACT1_1_ALPHA          = auto()
+    A_HIFT_RES_ACT1_2_ALPHA          = auto()
+    A_HIFT_RES_ACT2_0_ALPHA          = auto()
+    A_HIFT_RES_ACT2_1_ALPHA          = auto()
+    A_HIFT_RES_ACT2_2_ALPHA          = auto()
+    # Source resblocks (3 outer × same shape as regular)
+    A_HIFT_SRES_CONVS1_0             = auto()
+    A_HIFT_SRES_CONVS1_1             = auto()
+    A_HIFT_SRES_CONVS1_2             = auto()
+    A_HIFT_SRES_CONVS2_0             = auto()
+    A_HIFT_SRES_CONVS2_1             = auto()
+    A_HIFT_SRES_CONVS2_2             = auto()
+    A_HIFT_SRES_ACT1_0_ALPHA         = auto()
+    A_HIFT_SRES_ACT1_1_ALPHA         = auto()
+    A_HIFT_SRES_ACT1_2_ALPHA         = auto()
+    A_HIFT_SRES_ACT2_0_ALPHA         = auto()
+    A_HIFT_SRES_ACT2_1_ALPHA         = auto()
+    A_HIFT_SRES_ACT2_2_ALPHA         = auto()
+    # chatterbox (Flow subsystem, "flow.*") — Conditional Flow Matching model used
+    # to turn discrete speech tokens into mel-spectrograms.
+    #
+    # Three top-level modules (input_embedding, spk_embed_affine_layer, encoder_proj),
+    # an UpsampleConformerEncoder (encoder), and a ConditionalDecoder estimator
+    # (decoder.estimator). The decoder estimator has a UNet-shaped down/mid/up
+    # path; each (down|mid|up)_block carries one CausalResnetBlock1D (sub=0),
+    # n_blocks=4 BasicTransformerBlocks (sub=1), and (for down/up only) a single
+    # Conv1d/ConvTranspose1d sample-changer (sub=2).
+    #
+    # No weight_norm / BatchNorm anywhere → pass-through only, no fusion.
+    # For the transformer sub-list, the convert code renames source names of the
+    # form "*_blocks.{outer}.1.{inner}.*" into a synthetic alias keyed by a
+    # compound bid = outer*4 + inner; the canonical encodes that compound bid
+    # in its single {bid} slot. This collapses what would otherwise need 32
+    # enums per block-type down to 8.
+    # ---- top-level ----
+    A_FLOW_INPUT_EMB                       = auto()
+    A_FLOW_SPK_AFFINE                      = auto()
+    A_FLOW_ENC_PROJ                        = auto()
+    # ---- encoder (UpsampleConformerEncoder) ----
+    # standalone (non-templated)
+    A_FLOW_ENC_EMBED_LINEAR                = auto()
+    A_FLOW_ENC_EMBED_LN                    = auto()
+    A_FLOW_ENC_AFTER_NORM                  = auto()
+    A_FLOW_ENC_PRELOOK_CONV1               = auto()
+    A_FLOW_ENC_PRELOOK_CONV2               = auto()
+    A_FLOW_ENC_UP_LAYER_CONV               = auto()
+    A_FLOW_ENC_UP_EMBED_LINEAR             = auto()
+    A_FLOW_ENC_UP_EMBED_LN                 = auto()
+    # ConformerEncoderLayer fields, replicated across two stacks
+    # (encoders.{0..5} and up_encoders.{0..3}). 11 enums × 2.
+    A_FLOW_ENC_BLK_NORM_MHA                = auto()
+    A_FLOW_ENC_BLK_NORM_FF                 = auto()
+    A_FLOW_ENC_BLK_ATTN_Q                  = auto()
+    A_FLOW_ENC_BLK_ATTN_K                  = auto()
+    A_FLOW_ENC_BLK_ATTN_V                  = auto()
+    A_FLOW_ENC_BLK_ATTN_OUT                = auto()
+    A_FLOW_ENC_BLK_ATTN_POS                = auto()
+    A_FLOW_ENC_BLK_ATTN_POS_BIAS_U         = auto()  # raw nn.Parameter
+    A_FLOW_ENC_BLK_ATTN_POS_BIAS_V         = auto()  # raw nn.Parameter
+    A_FLOW_ENC_BLK_FF_W1                   = auto()
+    A_FLOW_ENC_BLK_FF_W2                   = auto()
+    A_FLOW_ENC_UP_BLK_NORM_MHA             = auto()
+    A_FLOW_ENC_UP_BLK_NORM_FF              = auto()
+    A_FLOW_ENC_UP_BLK_ATTN_Q               = auto()
+    A_FLOW_ENC_UP_BLK_ATTN_K               = auto()
+    A_FLOW_ENC_UP_BLK_ATTN_V               = auto()
+    A_FLOW_ENC_UP_BLK_ATTN_OUT             = auto()
+    A_FLOW_ENC_UP_BLK_ATTN_POS             = auto()
+    A_FLOW_ENC_UP_BLK_ATTN_POS_BIAS_U      = auto()
+    A_FLOW_ENC_UP_BLK_ATTN_POS_BIAS_V      = auto()
+    A_FLOW_ENC_UP_BLK_FF_W1                = auto()
+    A_FLOW_ENC_UP_BLK_FF_W2                = auto()
+    # ---- decoder estimator (ConditionalDecoder) ----
+    # standalone
+    A_FLOW_DEC_TIME_MLP_L1                 = auto()
+    A_FLOW_DEC_TIME_MLP_L2                 = auto()
+    A_FLOW_DEC_TIME_MIXER                  = auto()  # only present when meanflow=True; no bias
+    A_FLOW_DEC_FINAL_BLOCK_CONV            = auto()
+    A_FLOW_DEC_FINAL_BLOCK_LN              = auto()
+    A_FLOW_DEC_FINAL_PROJ                  = auto()
+    # down_blocks (1 outer in this config; 6 resnet + 8 tx + 1 sample = 15)
+    A_FLOW_DEC_DOWN_RES_BLK1_CONV          = auto()
+    A_FLOW_DEC_DOWN_RES_BLK1_LN            = auto()
+    A_FLOW_DEC_DOWN_RES_BLK2_CONV          = auto()
+    A_FLOW_DEC_DOWN_RES_BLK2_LN            = auto()
+    A_FLOW_DEC_DOWN_RES_MLP                = auto()
+    A_FLOW_DEC_DOWN_RES_RESCONV            = auto()
+    A_FLOW_DEC_DOWN_TX_NORM1               = auto()  # bid = outer*4 + inner
+    A_FLOW_DEC_DOWN_TX_NORM3               = auto()
+    A_FLOW_DEC_DOWN_TX_ATTN_Q              = auto()
+    A_FLOW_DEC_DOWN_TX_ATTN_K              = auto()
+    A_FLOW_DEC_DOWN_TX_ATTN_V              = auto()
+    A_FLOW_DEC_DOWN_TX_ATTN_OUT            = auto()
+    A_FLOW_DEC_DOWN_TX_FF_PROJ             = auto()  # GELU's internal Linear (ff.net.0.proj)
+    A_FLOW_DEC_DOWN_TX_FF_OUT              = auto()  # ff.net.2
+    A_FLOW_DEC_DOWN_SAMPLE                 = auto()  # CausalConv1d (causal=True, is_last)
+    # mid_blocks (12 outer; 6 resnet + 8 tx = 14, no sub=2)
+    A_FLOW_DEC_MID_RES_BLK1_CONV           = auto()
+    A_FLOW_DEC_MID_RES_BLK1_LN             = auto()
+    A_FLOW_DEC_MID_RES_BLK2_CONV           = auto()
+    A_FLOW_DEC_MID_RES_BLK2_LN             = auto()
+    A_FLOW_DEC_MID_RES_MLP                 = auto()
+    A_FLOW_DEC_MID_RES_RESCONV             = auto()
+    A_FLOW_DEC_MID_TX_NORM1                = auto()
+    A_FLOW_DEC_MID_TX_NORM3                = auto()
+    A_FLOW_DEC_MID_TX_ATTN_Q               = auto()
+    A_FLOW_DEC_MID_TX_ATTN_K               = auto()
+    A_FLOW_DEC_MID_TX_ATTN_V               = auto()
+    A_FLOW_DEC_MID_TX_ATTN_OUT             = auto()
+    A_FLOW_DEC_MID_TX_FF_PROJ              = auto()
+    A_FLOW_DEC_MID_TX_FF_OUT               = auto()
+    # up_blocks (1 outer; 6 resnet + 8 tx + 1 sample = 15)
+    A_FLOW_DEC_UP_RES_BLK1_CONV            = auto()
+    A_FLOW_DEC_UP_RES_BLK1_LN              = auto()
+    A_FLOW_DEC_UP_RES_BLK2_CONV            = auto()
+    A_FLOW_DEC_UP_RES_BLK2_LN              = auto()
+    A_FLOW_DEC_UP_RES_MLP                  = auto()
+    A_FLOW_DEC_UP_RES_RESCONV              = auto()
+    A_FLOW_DEC_UP_TX_NORM1                 = auto()
+    A_FLOW_DEC_UP_TX_NORM3                 = auto()
+    A_FLOW_DEC_UP_TX_ATTN_Q                = auto()
+    A_FLOW_DEC_UP_TX_ATTN_K                = auto()
+    A_FLOW_DEC_UP_TX_ATTN_V                = auto()
+    A_FLOW_DEC_UP_TX_ATTN_OUT              = auto()
+    A_FLOW_DEC_UP_TX_FF_PROJ               = auto()
+    A_FLOW_DEC_UP_TX_FF_OUT                = auto()
+    A_FLOW_DEC_UP_SAMPLE                   = auto()  # ConvTranspose1d (Upsample1D, use_conv_transpose=True)
     # nextn/mtp
     NEXTN_EH_PROJ        = auto()
     NEXTN_EMBED_TOKENS   = auto()
@@ -819,6 +1010,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.BAICHUAN:         "baichuan",
     MODEL_ARCH.GROK:             "grok",
     MODEL_ARCH.GPT2:             "gpt2",
+    MODEL_ARCH.CHATTERBOX_T3:    "chatterbox-t3",
     MODEL_ARCH.GPTJ:             "gptj",
     MODEL_ARCH.GPTNEOX:          "gptneox",
     MODEL_ARCH.MPT:              "mpt",
@@ -1236,6 +1428,173 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_MM_SOFT_EMB_NORM:        "mm.a.soft_emb_norm",         # gemma3n
     MODEL_TENSOR.A_MM_EMBEDDING:            "mm.a.embedding",             # gemma3n
     MODEL_TENSOR.A_MM_HARD_EMB_NORM:        "mm.a.hard_emb_norm",         # gemma3n
+    MODEL_TENSOR.A_MM_TEXT_EMBEDDING:       "mm.a.text_embedding",        # chatterbox
+    MODEL_TENSOR.A_ENC_LSTM_IH:             "a.lstm.ih.{bid}",            # chatterbox
+    MODEL_TENSOR.A_ENC_LSTM_HH:             "a.lstm.hh.{bid}",            # chatterbox
+    MODEL_TENSOR.A_ENC_LSTM_PROJ:           "a.lstm.proj",                # chatterbox
+    MODEL_TENSOR.A_ENC_FSMN_CONV:           "a.blk.{bid}.fsmn_conv",      # chatterbox (s3tok)
+    MODEL_TENSOR.A_ENC_FSQ_PROJ:            "a.quant.fsq.proj",           # chatterbox (s3tok)
+    # chatterbox CAMPPlus speaker encoder
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_BN1:                  "a.campplus.head.bn1",
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_BN2:                  "a.campplus.head.bn2",
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_CONV1:                "a.campplus.head.conv1",
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_CONV2:                "a.campplus.head.conv2",
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_BN1:            "a.campplus.head.basic.{bid}.bn1",
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_BN2:            "a.campplus.head.basic.{bid}.bn2",
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_CONV1:          "a.campplus.head.basic.{bid}.conv1",
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_CONV2:          "a.campplus.head.basic.{bid}.conv2",
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_SHORTCUT_CONV:  "a.campplus.head.basic.{bid}.shortcut.conv",
+    MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_SHORTCUT_BN:    "a.campplus.head.basic.{bid}.shortcut.bn",
+    MODEL_TENSOR.A_CAMPPLUS_XV_TDNN_LINEAR:            "a.campplus.xv.tdnn.linear",
+    MODEL_TENSOR.A_CAMPPLUS_XV_TDNN_BN:                "a.campplus.xv.tdnn.bn",
+    MODEL_TENSOR.A_CAMPPLUS_XV_TRANSIT_LINEAR:         "a.campplus.xv.transit.{bid}.linear",
+    MODEL_TENSOR.A_CAMPPLUS_XV_TRANSIT_BN:             "a.campplus.xv.transit.{bid}.bn",
+    MODEL_TENSOR.A_CAMPPLUS_XV_DENSE_LINEAR:           "a.campplus.xv.dense.linear",
+    MODEL_TENSOR.A_CAMPPLUS_XV_DENSE_BN:               "a.campplus.xv.dense.bn",
+    MODEL_TENSOR.A_CAMPPLUS_XV_OUT_BN:                 "a.campplus.xv.out.bn",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_LINEAR1:    "a.campplus.xv.block.1.tdnnd.{bid}.linear1",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_BN1:        "a.campplus.xv.block.1.tdnnd.{bid}.bn1",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_BN2:        "a.campplus.xv.block.1.tdnnd.{bid}.bn2",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_L1:     "a.campplus.xv.block.1.tdnnd.{bid}.cam.linear1",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_L2:     "a.campplus.xv.block.1.tdnnd.{bid}.cam.linear2",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_LOCAL:  "a.campplus.xv.block.1.tdnnd.{bid}.cam.linear_local",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_LINEAR1:    "a.campplus.xv.block.2.tdnnd.{bid}.linear1",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_BN1:        "a.campplus.xv.block.2.tdnnd.{bid}.bn1",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_BN2:        "a.campplus.xv.block.2.tdnnd.{bid}.bn2",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_L1:     "a.campplus.xv.block.2.tdnnd.{bid}.cam.linear1",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_L2:     "a.campplus.xv.block.2.tdnnd.{bid}.cam.linear2",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_LOCAL:  "a.campplus.xv.block.2.tdnnd.{bid}.cam.linear_local",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_LINEAR1:    "a.campplus.xv.block.3.tdnnd.{bid}.linear1",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_BN1:        "a.campplus.xv.block.3.tdnnd.{bid}.bn1",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_BN2:        "a.campplus.xv.block.3.tdnnd.{bid}.bn2",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_L1:     "a.campplus.xv.block.3.tdnnd.{bid}.cam.linear1",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_L2:     "a.campplus.xv.block.3.tdnnd.{bid}.cam.linear2",
+    MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_LOCAL:  "a.campplus.xv.block.3.tdnnd.{bid}.cam.linear_local",
+    # chatterbox HiFT vocoder
+    MODEL_TENSOR.A_HIFT_CONV_PRE:              "a.hift.conv_pre",
+    MODEL_TENSOR.A_HIFT_CONV_POST:             "a.hift.conv_post",
+    MODEL_TENSOR.A_HIFT_M_SOURCE_LINEAR:       "a.hift.m_source.linear",
+    MODEL_TENSOR.A_HIFT_F0_CLASSIFIER:         "a.hift.f0.classifier",
+    MODEL_TENSOR.A_HIFT_F0_CONDNET:            "a.hift.f0.condnet.{bid}",
+    MODEL_TENSOR.A_HIFT_UPS:                   "a.hift.ups.{bid}",
+    MODEL_TENSOR.A_HIFT_SOURCE_DOWN:           "a.hift.source_down.{bid}",
+    MODEL_TENSOR.A_HIFT_RES_CONVS1_0:          "a.hift.res.{bid}.convs1.0",
+    MODEL_TENSOR.A_HIFT_RES_CONVS1_1:          "a.hift.res.{bid}.convs1.1",
+    MODEL_TENSOR.A_HIFT_RES_CONVS1_2:          "a.hift.res.{bid}.convs1.2",
+    MODEL_TENSOR.A_HIFT_RES_CONVS2_0:          "a.hift.res.{bid}.convs2.0",
+    MODEL_TENSOR.A_HIFT_RES_CONVS2_1:          "a.hift.res.{bid}.convs2.1",
+    MODEL_TENSOR.A_HIFT_RES_CONVS2_2:          "a.hift.res.{bid}.convs2.2",
+    MODEL_TENSOR.A_HIFT_RES_ACT1_0_ALPHA:      "a.hift.res.{bid}.act1.0.alpha",
+    MODEL_TENSOR.A_HIFT_RES_ACT1_1_ALPHA:      "a.hift.res.{bid}.act1.1.alpha",
+    MODEL_TENSOR.A_HIFT_RES_ACT1_2_ALPHA:      "a.hift.res.{bid}.act1.2.alpha",
+    MODEL_TENSOR.A_HIFT_RES_ACT2_0_ALPHA:      "a.hift.res.{bid}.act2.0.alpha",
+    MODEL_TENSOR.A_HIFT_RES_ACT2_1_ALPHA:      "a.hift.res.{bid}.act2.1.alpha",
+    MODEL_TENSOR.A_HIFT_RES_ACT2_2_ALPHA:      "a.hift.res.{bid}.act2.2.alpha",
+    MODEL_TENSOR.A_HIFT_SRES_CONVS1_0:         "a.hift.sres.{bid}.convs1.0",
+    MODEL_TENSOR.A_HIFT_SRES_CONVS1_1:         "a.hift.sres.{bid}.convs1.1",
+    MODEL_TENSOR.A_HIFT_SRES_CONVS1_2:         "a.hift.sres.{bid}.convs1.2",
+    MODEL_TENSOR.A_HIFT_SRES_CONVS2_0:         "a.hift.sres.{bid}.convs2.0",
+    MODEL_TENSOR.A_HIFT_SRES_CONVS2_1:         "a.hift.sres.{bid}.convs2.1",
+    MODEL_TENSOR.A_HIFT_SRES_CONVS2_2:         "a.hift.sres.{bid}.convs2.2",
+    MODEL_TENSOR.A_HIFT_SRES_ACT1_0_ALPHA:     "a.hift.sres.{bid}.act1.0.alpha",
+    MODEL_TENSOR.A_HIFT_SRES_ACT1_1_ALPHA:     "a.hift.sres.{bid}.act1.1.alpha",
+    MODEL_TENSOR.A_HIFT_SRES_ACT1_2_ALPHA:     "a.hift.sres.{bid}.act1.2.alpha",
+    MODEL_TENSOR.A_HIFT_SRES_ACT2_0_ALPHA:     "a.hift.sres.{bid}.act2.0.alpha",
+    MODEL_TENSOR.A_HIFT_SRES_ACT2_1_ALPHA:     "a.hift.sres.{bid}.act2.1.alpha",
+    MODEL_TENSOR.A_HIFT_SRES_ACT2_2_ALPHA:     "a.hift.sres.{bid}.act2.2.alpha",
+    # chatterbox Flow (CFM token→mel) subsystem
+    # top-level
+    MODEL_TENSOR.A_FLOW_INPUT_EMB:                   "a.flow.input_emb",
+    MODEL_TENSOR.A_FLOW_SPK_AFFINE:                  "a.flow.spk_affine",
+    MODEL_TENSOR.A_FLOW_ENC_PROJ:                    "a.flow.enc_proj",
+    # encoder standalone
+    MODEL_TENSOR.A_FLOW_ENC_EMBED_LINEAR:            "a.flow.enc.embed.linear",
+    MODEL_TENSOR.A_FLOW_ENC_EMBED_LN:                "a.flow.enc.embed.ln",
+    MODEL_TENSOR.A_FLOW_ENC_AFTER_NORM:              "a.flow.enc.after_norm",
+    MODEL_TENSOR.A_FLOW_ENC_PRELOOK_CONV1:           "a.flow.enc.prelook.conv1",
+    MODEL_TENSOR.A_FLOW_ENC_PRELOOK_CONV2:           "a.flow.enc.prelook.conv2",
+    MODEL_TENSOR.A_FLOW_ENC_UP_LAYER_CONV:           "a.flow.enc.up_layer.conv",
+    MODEL_TENSOR.A_FLOW_ENC_UP_EMBED_LINEAR:         "a.flow.enc.up_embed.linear",
+    MODEL_TENSOR.A_FLOW_ENC_UP_EMBED_LN:             "a.flow.enc.up_embed.ln",
+    # encoder.encoders.{bid}.*
+    MODEL_TENSOR.A_FLOW_ENC_BLK_NORM_MHA:            "a.flow.enc.blk.{bid}.norm_mha",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_NORM_FF:             "a.flow.enc.blk.{bid}.norm_ff",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_Q:              "a.flow.enc.blk.{bid}.attn.q",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_K:              "a.flow.enc.blk.{bid}.attn.k",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_V:              "a.flow.enc.blk.{bid}.attn.v",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_OUT:            "a.flow.enc.blk.{bid}.attn.out",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_POS:            "a.flow.enc.blk.{bid}.attn.pos",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_POS_BIAS_U:     "a.flow.enc.blk.{bid}.attn.pos_bias_u",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_POS_BIAS_V:     "a.flow.enc.blk.{bid}.attn.pos_bias_v",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_FF_W1:               "a.flow.enc.blk.{bid}.ff.w1",
+    MODEL_TENSOR.A_FLOW_ENC_BLK_FF_W2:               "a.flow.enc.blk.{bid}.ff.w2",
+    # encoder.up_encoders.{bid}.*
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_NORM_MHA:         "a.flow.enc.up_blk.{bid}.norm_mha",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_NORM_FF:          "a.flow.enc.up_blk.{bid}.norm_ff",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_Q:           "a.flow.enc.up_blk.{bid}.attn.q",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_K:           "a.flow.enc.up_blk.{bid}.attn.k",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_V:           "a.flow.enc.up_blk.{bid}.attn.v",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_OUT:         "a.flow.enc.up_blk.{bid}.attn.out",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_POS:         "a.flow.enc.up_blk.{bid}.attn.pos",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_POS_BIAS_U:  "a.flow.enc.up_blk.{bid}.attn.pos_bias_u",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_POS_BIAS_V:  "a.flow.enc.up_blk.{bid}.attn.pos_bias_v",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_FF_W1:            "a.flow.enc.up_blk.{bid}.ff.w1",
+    MODEL_TENSOR.A_FLOW_ENC_UP_BLK_FF_W2:            "a.flow.enc.up_blk.{bid}.ff.w2",
+    # decoder standalone
+    MODEL_TENSOR.A_FLOW_DEC_TIME_MLP_L1:             "a.flow.dec.time_mlp.l1",
+    MODEL_TENSOR.A_FLOW_DEC_TIME_MLP_L2:             "a.flow.dec.time_mlp.l2",
+    MODEL_TENSOR.A_FLOW_DEC_TIME_MIXER:              "a.flow.dec.time_mixer",
+    MODEL_TENSOR.A_FLOW_DEC_FINAL_BLOCK_CONV:        "a.flow.dec.final_block.conv",
+    MODEL_TENSOR.A_FLOW_DEC_FINAL_BLOCK_LN:          "a.flow.dec.final_block.ln",
+    MODEL_TENSOR.A_FLOW_DEC_FINAL_PROJ:              "a.flow.dec.final_proj",
+    # decoder.down_blocks.{outer}.*
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK1_CONV:      "a.flow.dec.down.{bid}.res.b1.conv",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK1_LN:        "a.flow.dec.down.{bid}.res.b1.ln",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK2_CONV:      "a.flow.dec.down.{bid}.res.b2.conv",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK2_LN:        "a.flow.dec.down.{bid}.res.b2.ln",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_MLP:            "a.flow.dec.down.{bid}.res.mlp",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_RESCONV:        "a.flow.dec.down.{bid}.res.res_conv",
+    # transformer slots use compound bid = outer*4 + inner
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_NORM1:           "a.flow.dec.down.tx.{bid}.norm1",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_NORM3:           "a.flow.dec.down.tx.{bid}.norm3",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_Q:          "a.flow.dec.down.tx.{bid}.attn.q",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_K:          "a.flow.dec.down.tx.{bid}.attn.k",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_V:          "a.flow.dec.down.tx.{bid}.attn.v",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_OUT:        "a.flow.dec.down.tx.{bid}.attn.out",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_FF_PROJ:         "a.flow.dec.down.tx.{bid}.ff.proj",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_FF_OUT:          "a.flow.dec.down.tx.{bid}.ff.out",
+    MODEL_TENSOR.A_FLOW_DEC_DOWN_SAMPLE:             "a.flow.dec.down.{bid}.sample",
+    # decoder.mid_blocks.{outer}.*
+    MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK1_CONV:       "a.flow.dec.mid.{bid}.res.b1.conv",
+    MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK1_LN:         "a.flow.dec.mid.{bid}.res.b1.ln",
+    MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK2_CONV:       "a.flow.dec.mid.{bid}.res.b2.conv",
+    MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK2_LN:         "a.flow.dec.mid.{bid}.res.b2.ln",
+    MODEL_TENSOR.A_FLOW_DEC_MID_RES_MLP:             "a.flow.dec.mid.{bid}.res.mlp",
+    MODEL_TENSOR.A_FLOW_DEC_MID_RES_RESCONV:         "a.flow.dec.mid.{bid}.res.res_conv",
+    MODEL_TENSOR.A_FLOW_DEC_MID_TX_NORM1:            "a.flow.dec.mid.tx.{bid}.norm1",
+    MODEL_TENSOR.A_FLOW_DEC_MID_TX_NORM3:            "a.flow.dec.mid.tx.{bid}.norm3",
+    MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_Q:           "a.flow.dec.mid.tx.{bid}.attn.q",
+    MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_K:           "a.flow.dec.mid.tx.{bid}.attn.k",
+    MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_V:           "a.flow.dec.mid.tx.{bid}.attn.v",
+    MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_OUT:         "a.flow.dec.mid.tx.{bid}.attn.out",
+    MODEL_TENSOR.A_FLOW_DEC_MID_TX_FF_PROJ:          "a.flow.dec.mid.tx.{bid}.ff.proj",
+    MODEL_TENSOR.A_FLOW_DEC_MID_TX_FF_OUT:           "a.flow.dec.mid.tx.{bid}.ff.out",
+    # decoder.up_blocks.{outer}.*
+    MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK1_CONV:        "a.flow.dec.up.{bid}.res.b1.conv",
+    MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK1_LN:          "a.flow.dec.up.{bid}.res.b1.ln",
+    MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK2_CONV:        "a.flow.dec.up.{bid}.res.b2.conv",
+    MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK2_LN:          "a.flow.dec.up.{bid}.res.b2.ln",
+    MODEL_TENSOR.A_FLOW_DEC_UP_RES_MLP:              "a.flow.dec.up.{bid}.res.mlp",
+    MODEL_TENSOR.A_FLOW_DEC_UP_RES_RESCONV:          "a.flow.dec.up.{bid}.res.res_conv",
+    MODEL_TENSOR.A_FLOW_DEC_UP_TX_NORM1:             "a.flow.dec.up.tx.{bid}.norm1",
+    MODEL_TENSOR.A_FLOW_DEC_UP_TX_NORM3:             "a.flow.dec.up.tx.{bid}.norm3",
+    MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_Q:            "a.flow.dec.up.tx.{bid}.attn.q",
+    MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_K:            "a.flow.dec.up.tx.{bid}.attn.k",
+    MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_V:            "a.flow.dec.up.tx.{bid}.attn.v",
+    MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_OUT:          "a.flow.dec.up.tx.{bid}.attn.out",
+    MODEL_TENSOR.A_FLOW_DEC_UP_TX_FF_PROJ:           "a.flow.dec.up.tx.{bid}.ff.proj",
+    MODEL_TENSOR.A_FLOW_DEC_UP_TX_FF_OUT:            "a.flow.dec.up.tx.{bid}.ff.out",
+    MODEL_TENSOR.A_FLOW_DEC_UP_SAMPLE:               "a.flow.dec.up.{bid}.sample",
     # lfm2 audio
     MODEL_TENSOR.A_ENC_NORM_CONV:           "a.blk.{bid}.norm_conv",
     MODEL_TENSOR.A_ENC_LINEAR_POS:          "a.blk.{bid}.linear_pos",
@@ -1362,6 +1721,162 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_MM_SOFT_EMB_NORM,
         MODEL_TENSOR.A_MM_EMBEDDING,
         MODEL_TENSOR.A_MM_HARD_EMB_NORM,
+        MODEL_TENSOR.A_MM_TEXT_EMBEDDING,
+        MODEL_TENSOR.A_ENC_LSTM_IH,
+        MODEL_TENSOR.A_ENC_LSTM_HH,
+        MODEL_TENSOR.A_ENC_LSTM_PROJ,
+        MODEL_TENSOR.A_ENC_FSMN_CONV,
+        MODEL_TENSOR.A_ENC_FSQ_PROJ,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BN1,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BN2,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_CONV1,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_CONV2,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_BN1,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_BN2,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_CONV1,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_CONV2,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_SHORTCUT_CONV,
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_SHORTCUT_BN,
+        MODEL_TENSOR.A_CAMPPLUS_XV_TDNN_LINEAR,
+        MODEL_TENSOR.A_CAMPPLUS_XV_TDNN_BN,
+        MODEL_TENSOR.A_CAMPPLUS_XV_TRANSIT_LINEAR,
+        MODEL_TENSOR.A_CAMPPLUS_XV_TRANSIT_BN,
+        MODEL_TENSOR.A_CAMPPLUS_XV_DENSE_LINEAR,
+        MODEL_TENSOR.A_CAMPPLUS_XV_DENSE_BN,
+        MODEL_TENSOR.A_CAMPPLUS_XV_OUT_BN,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_LINEAR1,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_BN1,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_BN2,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_L1,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_L2,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_LOCAL,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_LINEAR1,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_BN1,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_BN2,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_L1,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_L2,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_LOCAL,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_LINEAR1,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_BN1,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_BN2,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_L1,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_L2,
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_LOCAL,
+        MODEL_TENSOR.A_HIFT_CONV_PRE,
+        MODEL_TENSOR.A_HIFT_CONV_POST,
+        MODEL_TENSOR.A_HIFT_M_SOURCE_LINEAR,
+        MODEL_TENSOR.A_HIFT_F0_CLASSIFIER,
+        MODEL_TENSOR.A_HIFT_F0_CONDNET,
+        MODEL_TENSOR.A_HIFT_UPS,
+        MODEL_TENSOR.A_HIFT_SOURCE_DOWN,
+        MODEL_TENSOR.A_HIFT_RES_CONVS1_0,
+        MODEL_TENSOR.A_HIFT_RES_CONVS1_1,
+        MODEL_TENSOR.A_HIFT_RES_CONVS1_2,
+        MODEL_TENSOR.A_HIFT_RES_CONVS2_0,
+        MODEL_TENSOR.A_HIFT_RES_CONVS2_1,
+        MODEL_TENSOR.A_HIFT_RES_CONVS2_2,
+        MODEL_TENSOR.A_HIFT_RES_ACT1_0_ALPHA,
+        MODEL_TENSOR.A_HIFT_RES_ACT1_1_ALPHA,
+        MODEL_TENSOR.A_HIFT_RES_ACT1_2_ALPHA,
+        MODEL_TENSOR.A_HIFT_RES_ACT2_0_ALPHA,
+        MODEL_TENSOR.A_HIFT_RES_ACT2_1_ALPHA,
+        MODEL_TENSOR.A_HIFT_RES_ACT2_2_ALPHA,
+        MODEL_TENSOR.A_HIFT_SRES_CONVS1_0,
+        MODEL_TENSOR.A_HIFT_SRES_CONVS1_1,
+        MODEL_TENSOR.A_HIFT_SRES_CONVS1_2,
+        MODEL_TENSOR.A_HIFT_SRES_CONVS2_0,
+        MODEL_TENSOR.A_HIFT_SRES_CONVS2_1,
+        MODEL_TENSOR.A_HIFT_SRES_CONVS2_2,
+        MODEL_TENSOR.A_HIFT_SRES_ACT1_0_ALPHA,
+        MODEL_TENSOR.A_HIFT_SRES_ACT1_1_ALPHA,
+        MODEL_TENSOR.A_HIFT_SRES_ACT1_2_ALPHA,
+        MODEL_TENSOR.A_HIFT_SRES_ACT2_0_ALPHA,
+        MODEL_TENSOR.A_HIFT_SRES_ACT2_1_ALPHA,
+        MODEL_TENSOR.A_HIFT_SRES_ACT2_2_ALPHA,
+        # chatterbox Flow (CFM token→mel)
+        MODEL_TENSOR.A_FLOW_INPUT_EMB,
+        MODEL_TENSOR.A_FLOW_SPK_AFFINE,
+        MODEL_TENSOR.A_FLOW_ENC_PROJ,
+        MODEL_TENSOR.A_FLOW_ENC_EMBED_LINEAR,
+        MODEL_TENSOR.A_FLOW_ENC_EMBED_LN,
+        MODEL_TENSOR.A_FLOW_ENC_AFTER_NORM,
+        MODEL_TENSOR.A_FLOW_ENC_PRELOOK_CONV1,
+        MODEL_TENSOR.A_FLOW_ENC_PRELOOK_CONV2,
+        MODEL_TENSOR.A_FLOW_ENC_UP_LAYER_CONV,
+        MODEL_TENSOR.A_FLOW_ENC_UP_EMBED_LINEAR,
+        MODEL_TENSOR.A_FLOW_ENC_UP_EMBED_LN,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_NORM_MHA,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_NORM_FF,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_Q,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_K,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_V,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_OUT,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_POS,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_POS_BIAS_U,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_POS_BIAS_V,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_FF_W1,
+        MODEL_TENSOR.A_FLOW_ENC_BLK_FF_W2,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_NORM_MHA,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_NORM_FF,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_Q,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_K,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_V,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_OUT,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_POS,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_POS_BIAS_U,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_POS_BIAS_V,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_FF_W1,
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_FF_W2,
+        MODEL_TENSOR.A_FLOW_DEC_TIME_MLP_L1,
+        MODEL_TENSOR.A_FLOW_DEC_TIME_MLP_L2,
+        MODEL_TENSOR.A_FLOW_DEC_TIME_MIXER,
+        MODEL_TENSOR.A_FLOW_DEC_FINAL_BLOCK_CONV,
+        MODEL_TENSOR.A_FLOW_DEC_FINAL_BLOCK_LN,
+        MODEL_TENSOR.A_FLOW_DEC_FINAL_PROJ,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK1_CONV,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK1_LN,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK2_CONV,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK2_LN,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_MLP,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_RESCONV,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_NORM1,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_NORM3,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_Q,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_K,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_V,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_OUT,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_FF_PROJ,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_FF_OUT,
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_SAMPLE,
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK1_CONV,
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK1_LN,
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK2_CONV,
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK2_LN,
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_MLP,
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_RESCONV,
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_NORM1,
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_NORM3,
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_Q,
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_K,
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_V,
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_OUT,
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_FF_PROJ,
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_FF_OUT,
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK1_CONV,
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK1_LN,
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK2_CONV,
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK2_LN,
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_MLP,
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_RESCONV,
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_NORM1,
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_NORM3,
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_Q,
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_K,
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_V,
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_OUT,
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_FF_PROJ,
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_FF_OUT,
+        MODEL_TENSOR.A_FLOW_DEC_UP_SAMPLE,
     ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -1994,6 +2509,18 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_POST_NORM,
     ],
     MODEL_ARCH.GPT2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.POS_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.CHATTERBOX_T3: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.POS_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,

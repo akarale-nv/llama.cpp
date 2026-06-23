@@ -1708,6 +1708,7 @@ class TensorNameMap:
             "audio_tower.conv{bid}", # ultravox
             "conformer.pre_encode.conv.{bid}", # lfm2
             "model.audio_tower.subsample_conv_projection.conv_{bid}.conv", # gemma3n
+            "tokenizer.encoder.conv{bid}", # chatterbox (s3tok)
         ),
 
         MODEL_TENSOR.A_ENC_CONV1D_NORM: (
@@ -1725,18 +1726,21 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn.q_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_q", # lfm2
             "conformer.layers.{bid}.attention.attn.q_proj", # gemma3n
+            "tokenizer.encoder.blocks.{bid}.attn.query", # chatterbox (s3tok)
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K: (
             "audio_tower.layers.{bid}.self_attn.k_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_k", # lfm2
             "conformer.layers.{bid}.attention.attn.k_proj", # gemma3n
+            "tokenizer.encoder.blocks.{bid}.attn.key", # chatterbox (s3tok)
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_V: (
             "audio_tower.layers.{bid}.self_attn.v_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_v", # lfm2
             "conformer.layers.{bid}.attention.attn.v_proj", # gemma3n
+            "tokenizer.encoder.blocks.{bid}.attn.value", # chatterbox (s3tok)
         ),
 
         MODEL_TENSOR.A_ENC_PER_DIM_SCALE: (
@@ -1751,12 +1755,14 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_self_att", # lfm2
             "conformer.layers.{bid}.attention.pre_attn_norm", # gemma3n
+            "tokenizer.encoder.blocks.{bid}.attn_ln", # chatterbox (s3tok)
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT: (
             "audio_tower.layers.{bid}.self_attn.out_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_out", # lfm2
             "conformer.layers.{bid}.attention.post", # gemma3n
+            "tokenizer.encoder.blocks.{bid}.attn.out", # chatterbox (s3tok)
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
@@ -1768,6 +1774,7 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_FFN_NORM: (
             "conformer.layers.{bid}.norm_feed_forward1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.pre_layer_norm", # gemma3n
+            "tokenizer.encoder.blocks.{bid}.mlp_ln", # chatterbox (s3tok)
         ),
 
         MODEL_TENSOR.A_ENC_FFN_POST_NORM: (
@@ -1782,6 +1789,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc1", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
+            "tokenizer.encoder.blocks.{bid}.mlp.0", # chatterbox (s3tok)
         ),
 
         MODEL_TENSOR.A_ENC_FFN_GATE: (),
@@ -1790,6 +1798,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc2", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear2", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
+            "tokenizer.encoder.blocks.{bid}.mlp.2", # chatterbox (s3tok)
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP_1: (
@@ -1844,6 +1853,7 @@ class TensorNameMap:
         MODEL_TENSOR.A_MMPROJ_FC: (
             "audio.multi_modal_projector.linear", # qwen2audio
             "audio_tower.proj", # qwen2omni
+            "cond_enc.spkr_enc", # chatterbox
         ),
 
         MODEL_TENSOR.A_MM_NORM_PRE: (
@@ -1890,6 +1900,467 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.A_MM_SOFT_EMB_NORM: (
             "model.embed_audio.soft_embedding_norm", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_MM_TEXT_EMBEDDING: (
+            "text_emb", # chatterbox
+        ),
+        MODEL_TENSOR.A_ENC_LSTM_IH: (
+            "lstm.ih.{bid}", # chatterbox (post-rename from lstm.weight_ih_l{bid} / lstm.bias_ih_l{bid})
+        ),
+        MODEL_TENSOR.A_ENC_LSTM_HH: (
+            "lstm.hh.{bid}", # chatterbox (post-rename from lstm.weight_hh_l{bid} / lstm.bias_hh_l{bid})
+        ),
+        MODEL_TENSOR.A_ENC_LSTM_PROJ: (
+            "proj", # chatterbox
+        ),
+        MODEL_TENSOR.A_ENC_FSMN_CONV: (
+            "tokenizer.encoder.blocks.{bid}.attn.fsmn_block", # chatterbox (s3tok)
+        ),
+        MODEL_TENSOR.A_ENC_FSQ_PROJ: (
+            "tokenizer.quantizer._codebook.project_down", # chatterbox (s3tok)
+        ),
+
+        # chatterbox CAMPPlus — BN entries have no HF alias because the convert
+        # code yields the fused (gamma', beta') with the canonical name directly
+        # (fold-at-conversion path). Non-BN entries either use a {bid} template
+        # or have an empty tuple when the convert code renames before yielding
+        # (head BasicBlock flattening).
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BN1: (),
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BN2: (),
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_CONV1: (
+            "speaker_encoder.head.conv1", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_CONV2: (
+            "speaker_encoder.head.conv2", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_BN1: (),
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_BN2: (),
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_CONV1: (),           # renamed by convert (layer/idx flatten)
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_CONV2: (),           # renamed by convert
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_SHORTCUT_CONV: (),   # renamed by convert
+        MODEL_TENSOR.A_CAMPPLUS_HEAD_BASIC_SHORTCUT_BN: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_TDNN_LINEAR: (
+            "speaker_encoder.xvector.tdnn.linear", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_TDNN_BN: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_TRANSIT_LINEAR: (
+            "speaker_encoder.xvector.transit{bid}.linear", # chatterbox (campplus) — bid matches source's 1-based index
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_TRANSIT_BN: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_DENSE_LINEAR: (
+            "speaker_encoder.xvector.dense.linear", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_DENSE_BN: (),                # affine=False BN
+        MODEL_TENSOR.A_CAMPPLUS_XV_OUT_BN: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_LINEAR1: (
+            "speaker_encoder.xvector.block1.tdnnd{bid}.linear1", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_BN1: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_BN2: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_L1: (
+            "speaker_encoder.xvector.block1.tdnnd{bid}.cam_layer.linear1", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_L2: (
+            "speaker_encoder.xvector.block1.tdnnd{bid}.cam_layer.linear2", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK1_TDNN_CAM_LOCAL: (
+            "speaker_encoder.xvector.block1.tdnnd{bid}.cam_layer.linear_local", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_LINEAR1: (
+            "speaker_encoder.xvector.block2.tdnnd{bid}.linear1", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_BN1: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_BN2: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_L1: (
+            "speaker_encoder.xvector.block2.tdnnd{bid}.cam_layer.linear1", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_L2: (
+            "speaker_encoder.xvector.block2.tdnnd{bid}.cam_layer.linear2", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK2_TDNN_CAM_LOCAL: (
+            "speaker_encoder.xvector.block2.tdnnd{bid}.cam_layer.linear_local", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_LINEAR1: (
+            "speaker_encoder.xvector.block3.tdnnd{bid}.linear1", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_BN1: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_BN2: (),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_L1: (
+            "speaker_encoder.xvector.block3.tdnnd{bid}.cam_layer.linear1", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_L2: (
+            "speaker_encoder.xvector.block3.tdnnd{bid}.cam_layer.linear2", # chatterbox (campplus)
+        ),
+        MODEL_TENSOR.A_CAMPPLUS_XV_BLOCK3_TDNN_CAM_LOCAL: (
+            "speaker_encoder.xvector.block3.tdnnd{bid}.cam_layer.linear_local", # chatterbox (campplus)
+        ),
+
+        # chatterbox HiFT vocoder — weights of weight_norm'd Conv1d/ConvTranspose1d
+        # are emitted post-fusion with the canonical name directly by the convert
+        # code (so aliases here cover .bias and (for Snake) .alpha only). Aliases
+        # for plain (non-weight_norm) layers map both .weight and .bias via the
+        # standard suffix-strip path.
+        MODEL_TENSOR.A_HIFT_CONV_PRE: (
+            "mel2wav.conv_pre", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_CONV_POST: (
+            "mel2wav.conv_post", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_M_SOURCE_LINEAR: (
+            "mel2wav.m_source.l_linear", # chatterbox (HiFT) — plain Linear, no weight_norm
+        ),
+        MODEL_TENSOR.A_HIFT_F0_CLASSIFIER: (
+            "mel2wav.f0_predictor.classifier", # chatterbox (HiFT) — plain Linear
+        ),
+        MODEL_TENSOR.A_HIFT_F0_CONDNET: (
+            "mel2wav.f0_predictor.condnet.{bid}", # chatterbox (HiFT) — convert code compresses HF's 0,2,4,6,8 → 0..4
+        ),
+        MODEL_TENSOR.A_HIFT_UPS: (
+            "mel2wav.ups.{bid}", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_SOURCE_DOWN: (
+            "mel2wav.source_downs.{bid}", # chatterbox (HiFT) — plain Conv1d, no weight_norm
+        ),
+        MODEL_TENSOR.A_HIFT_RES_CONVS1_0: (
+            "mel2wav.resblocks.{bid}.convs1.0", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_RES_CONVS1_1: (
+            "mel2wav.resblocks.{bid}.convs1.1", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_RES_CONVS1_2: (
+            "mel2wav.resblocks.{bid}.convs1.2", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_RES_CONVS2_0: (
+            "mel2wav.resblocks.{bid}.convs2.0", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_RES_CONVS2_1: (
+            "mel2wav.resblocks.{bid}.convs2.1", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_RES_CONVS2_2: (
+            "mel2wav.resblocks.{bid}.convs2.2", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_RES_ACT1_0_ALPHA: (
+            "mel2wav.resblocks.{bid}.activations1.0.alpha", # chatterbox (HiFT) — full key incl. .alpha
+        ),
+        MODEL_TENSOR.A_HIFT_RES_ACT1_1_ALPHA: (
+            "mel2wav.resblocks.{bid}.activations1.1.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_RES_ACT1_2_ALPHA: (
+            "mel2wav.resblocks.{bid}.activations1.2.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_RES_ACT2_0_ALPHA: (
+            "mel2wav.resblocks.{bid}.activations2.0.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_RES_ACT2_1_ALPHA: (
+            "mel2wav.resblocks.{bid}.activations2.1.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_RES_ACT2_2_ALPHA: (
+            "mel2wav.resblocks.{bid}.activations2.2.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_CONVS1_0: (
+            "mel2wav.source_resblocks.{bid}.convs1.0", # chatterbox (HiFT)
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_CONVS1_1: (
+            "mel2wav.source_resblocks.{bid}.convs1.1",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_CONVS1_2: (
+            "mel2wav.source_resblocks.{bid}.convs1.2",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_CONVS2_0: (
+            "mel2wav.source_resblocks.{bid}.convs2.0",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_CONVS2_1: (
+            "mel2wav.source_resblocks.{bid}.convs2.1",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_CONVS2_2: (
+            "mel2wav.source_resblocks.{bid}.convs2.2",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_ACT1_0_ALPHA: (
+            "mel2wav.source_resblocks.{bid}.activations1.0.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_ACT1_1_ALPHA: (
+            "mel2wav.source_resblocks.{bid}.activations1.1.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_ACT1_2_ALPHA: (
+            "mel2wav.source_resblocks.{bid}.activations1.2.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_ACT2_0_ALPHA: (
+            "mel2wav.source_resblocks.{bid}.activations2.0.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_ACT2_1_ALPHA: (
+            "mel2wav.source_resblocks.{bid}.activations2.1.alpha",
+        ),
+        MODEL_TENSOR.A_HIFT_SRES_ACT2_2_ALPHA: (
+            "mel2wav.source_resblocks.{bid}.activations2.2.alpha",
+        ),
+
+        # chatterbox Flow (CFM token→mel) subsystem. No fusion/folding needed:
+        # all aliases are direct pass-throughs except for the BasicTransformerBlock
+        # sub-list, where the convert code synthesises a single compound bid
+        # (outer*4 + inner) and feeds it through the "__flow_dec_<grp>_tx_{bid}.*"
+        # synthetic key — see _handle_flow_tensor in convert_hf_to_gguf.py.
+        # Snake/parameters that aren't .weight/.bias (pos_bias_u/v,
+        # time_embed_mixer) use a full-name alias including the leaf token.
+        # top-level
+        MODEL_TENSOR.A_FLOW_INPUT_EMB: (
+            "flow.input_embedding", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_SPK_AFFINE: (
+            "flow.spk_embed_affine_layer", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_PROJ: (
+            "flow.encoder_proj", # chatterbox (flow)
+        ),
+        # encoder standalone
+        MODEL_TENSOR.A_FLOW_ENC_EMBED_LINEAR: (
+            "flow.encoder.embed.out.0", # chatterbox (flow) — LinearNoSubsampling[0]
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_EMBED_LN: (
+            "flow.encoder.embed.out.1", # chatterbox (flow) — LinearNoSubsampling[1] (LayerNorm)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_AFTER_NORM: (
+            "flow.encoder.after_norm", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_PRELOOK_CONV1: (
+            "flow.encoder.pre_lookahead_layer.conv1", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_PRELOOK_CONV2: (
+            "flow.encoder.pre_lookahead_layer.conv2", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_LAYER_CONV: (
+            "flow.encoder.up_layer.conv", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_EMBED_LINEAR: (
+            "flow.encoder.up_embed.out.0", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_EMBED_LN: (
+            "flow.encoder.up_embed.out.1", # chatterbox (flow)
+        ),
+        # encoder.encoders.{bid}.*
+        MODEL_TENSOR.A_FLOW_ENC_BLK_NORM_MHA: (
+            "flow.encoder.encoders.{bid}.norm_mha", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_NORM_FF: (
+            "flow.encoder.encoders.{bid}.norm_ff", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_Q: (
+            "flow.encoder.encoders.{bid}.self_attn.linear_q", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_K: (
+            "flow.encoder.encoders.{bid}.self_attn.linear_k", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_V: (
+            "flow.encoder.encoders.{bid}.self_attn.linear_v", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_OUT: (
+            "flow.encoder.encoders.{bid}.self_attn.linear_out", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_POS: (
+            "flow.encoder.encoders.{bid}.self_attn.linear_pos", # chatterbox (flow) — weight only
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_POS_BIAS_U: (
+            "flow.encoder.encoders.{bid}.self_attn.pos_bias_u", # chatterbox (flow) — raw nn.Parameter
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_ATTN_POS_BIAS_V: (
+            "flow.encoder.encoders.{bid}.self_attn.pos_bias_v",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_FF_W1: (
+            "flow.encoder.encoders.{bid}.feed_forward.w_1", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_BLK_FF_W2: (
+            "flow.encoder.encoders.{bid}.feed_forward.w_2",
+        ),
+        # encoder.up_encoders.{bid}.*
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_NORM_MHA: (
+            "flow.encoder.up_encoders.{bid}.norm_mha",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_NORM_FF: (
+            "flow.encoder.up_encoders.{bid}.norm_ff",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_Q: (
+            "flow.encoder.up_encoders.{bid}.self_attn.linear_q",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_K: (
+            "flow.encoder.up_encoders.{bid}.self_attn.linear_k",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_V: (
+            "flow.encoder.up_encoders.{bid}.self_attn.linear_v",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_OUT: (
+            "flow.encoder.up_encoders.{bid}.self_attn.linear_out",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_POS: (
+            "flow.encoder.up_encoders.{bid}.self_attn.linear_pos",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_POS_BIAS_U: (
+            "flow.encoder.up_encoders.{bid}.self_attn.pos_bias_u",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_ATTN_POS_BIAS_V: (
+            "flow.encoder.up_encoders.{bid}.self_attn.pos_bias_v",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_FF_W1: (
+            "flow.encoder.up_encoders.{bid}.feed_forward.w_1",
+        ),
+        MODEL_TENSOR.A_FLOW_ENC_UP_BLK_FF_W2: (
+            "flow.encoder.up_encoders.{bid}.feed_forward.w_2",
+        ),
+        # decoder standalone
+        MODEL_TENSOR.A_FLOW_DEC_TIME_MLP_L1: (
+            "flow.decoder.estimator.time_mlp.linear_1", # chatterbox (flow)
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_TIME_MLP_L2: (
+            "flow.decoder.estimator.time_mlp.linear_2",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_TIME_MIXER: (
+            "flow.decoder.estimator.time_embed_mixer.weight", # chatterbox (flow) — full key (no bias)
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_FINAL_BLOCK_CONV: (
+            "flow.decoder.estimator.final_block.block.0", # CausalConv1d
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_FINAL_BLOCK_LN: (
+            "flow.decoder.estimator.final_block.block.2", # LayerNorm
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_FINAL_PROJ: (
+            "flow.decoder.estimator.final_proj",
+        ),
+        # decoder.down_blocks.{outer}.* — resnet (sub=0) + downsample (sub=2)
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK1_CONV: (
+            "flow.decoder.estimator.down_blocks.{bid}.0.block1.block.0",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK1_LN: (
+            "flow.decoder.estimator.down_blocks.{bid}.0.block1.block.2",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK2_CONV: (
+            "flow.decoder.estimator.down_blocks.{bid}.0.block2.block.0",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_BLK2_LN: (
+            "flow.decoder.estimator.down_blocks.{bid}.0.block2.block.2",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_MLP: (
+            "flow.decoder.estimator.down_blocks.{bid}.0.mlp.1",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_RES_RESCONV: (
+            "flow.decoder.estimator.down_blocks.{bid}.0.res_conv",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_SAMPLE: (
+            "flow.decoder.estimator.down_blocks.{bid}.2",
+        ),
+        # decoder.down_blocks.{outer}.1.{inner}.* — transformer (synthetic compound bid)
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_NORM1: (
+            "__flow_dec_down_tx_{bid}.norm1", # synthesised in convert (see _handle_flow_tensor)
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_NORM3: (
+            "__flow_dec_down_tx_{bid}.norm3",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_Q: (
+            "__flow_dec_down_tx_{bid}.attn1.to_q",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_K: (
+            "__flow_dec_down_tx_{bid}.attn1.to_k",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_V: (
+            "__flow_dec_down_tx_{bid}.attn1.to_v",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_ATTN_OUT: (
+            "__flow_dec_down_tx_{bid}.attn1.to_out.0",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_FF_PROJ: (
+            "__flow_dec_down_tx_{bid}.ff.net.0.proj",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_DOWN_TX_FF_OUT: (
+            "__flow_dec_down_tx_{bid}.ff.net.2",
+        ),
+        # decoder.mid_blocks.{outer}.* — resnet (sub=0) only; no sub=2
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK1_CONV: (
+            "flow.decoder.estimator.mid_blocks.{bid}.0.block1.block.0",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK1_LN: (
+            "flow.decoder.estimator.mid_blocks.{bid}.0.block1.block.2",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK2_CONV: (
+            "flow.decoder.estimator.mid_blocks.{bid}.0.block2.block.0",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_BLK2_LN: (
+            "flow.decoder.estimator.mid_blocks.{bid}.0.block2.block.2",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_MLP: (
+            "flow.decoder.estimator.mid_blocks.{bid}.0.mlp.1",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_RES_RESCONV: (
+            "flow.decoder.estimator.mid_blocks.{bid}.0.res_conv",
+        ),
+        # decoder.mid_blocks.{outer}.1.{inner}.* — transformer (synthetic compound bid)
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_NORM1: (
+            "__flow_dec_mid_tx_{bid}.norm1",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_NORM3: (
+            "__flow_dec_mid_tx_{bid}.norm3",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_Q: (
+            "__flow_dec_mid_tx_{bid}.attn1.to_q",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_K: (
+            "__flow_dec_mid_tx_{bid}.attn1.to_k",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_V: (
+            "__flow_dec_mid_tx_{bid}.attn1.to_v",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_ATTN_OUT: (
+            "__flow_dec_mid_tx_{bid}.attn1.to_out.0",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_FF_PROJ: (
+            "__flow_dec_mid_tx_{bid}.ff.net.0.proj",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_MID_TX_FF_OUT: (
+            "__flow_dec_mid_tx_{bid}.ff.net.2",
+        ),
+        # decoder.up_blocks.{outer}.* — resnet (sub=0) + upsample (sub=2)
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK1_CONV: (
+            "flow.decoder.estimator.up_blocks.{bid}.0.block1.block.0",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK1_LN: (
+            "flow.decoder.estimator.up_blocks.{bid}.0.block1.block.2",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK2_CONV: (
+            "flow.decoder.estimator.up_blocks.{bid}.0.block2.block.0",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_BLK2_LN: (
+            "flow.decoder.estimator.up_blocks.{bid}.0.block2.block.2",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_MLP: (
+            "flow.decoder.estimator.up_blocks.{bid}.0.mlp.1",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_RES_RESCONV: (
+            "flow.decoder.estimator.up_blocks.{bid}.0.res_conv",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_SAMPLE: (
+            "flow.decoder.estimator.up_blocks.{bid}.2",
+        ),
+        # decoder.up_blocks.{outer}.1.{inner}.* — transformer (synthetic compound bid)
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_NORM1: (
+            "__flow_dec_up_tx_{bid}.norm1",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_NORM3: (
+            "__flow_dec_up_tx_{bid}.norm3",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_Q: (
+            "__flow_dec_up_tx_{bid}.attn1.to_q",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_K: (
+            "__flow_dec_up_tx_{bid}.attn1.to_k",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_V: (
+            "__flow_dec_up_tx_{bid}.attn1.to_v",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_ATTN_OUT: (
+            "__flow_dec_up_tx_{bid}.attn1.to_out.0",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_FF_PROJ: (
+            "__flow_dec_up_tx_{bid}.ff.net.0.proj",
+        ),
+        MODEL_TENSOR.A_FLOW_DEC_UP_TX_FF_OUT: (
+            "__flow_dec_up_tx_{bid}.ff.net.2",
         ),
 
         # NextN/MTP tensors

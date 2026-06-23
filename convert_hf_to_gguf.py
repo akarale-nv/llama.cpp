@@ -12188,6 +12188,733 @@ class SolarOpenModel(Glm4MoeModel):
         special_vocab.add_to_gguf(self.gguf_writer)
 
 
+@ModelBase.register("ChatterboxTTSForGeneration")
+class ChatterboxT3Model(TextModel):
+    # May be replaced by GPT2 
+    model_arch = gguf.MODEL_ARCH.CHATTERBOX_T3
+
+    def set_vocab(self):
+        # T3's "vocab" is the speech codebook (6563 integer codes, not text tokens).
+        # The text BPE tokenizer (vocab.json/merges.txt) belongs in the mmproj GGUF.
+        # Pattern adapted from WavTokenizerDecModel.
+        self._set_vocab_none()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # TextModel.set_gguf_parameters() does not add vocab_size; _set_vocab_gpt2()
+        # normally would via add_token_list(). Since we use _set_vocab_none(), we
+        # must add it explicitly. Comes from text_config.vocab_size = 6563.
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        self.gguf_writer.add_string("chatterbox-t3.output_modality", "audio")
+        self.gguf_writer.add_uint32("chatterbox-t3.audio_token_id_start", 0)
+        self.gguf_writer.add_uint32("chatterbox-t3.audio_token_id_end", self.hparams["vocab_size"] - 1)
+        self.gguf_writer.add_bos_token_id(self.hparams["speech_start_token_id"])
+        self.gguf_writer.add_eos_token_id(self.hparams["speech_stop_token_id"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Allow-list: only T3 backbone / I/O tensors pass through.
+        # Everything else (ve.*, tokenizer.*, speaker_encoder.*, flow.*, mel2wav.*,
+        # text_emb.*, cond_enc.*, text_head.*, tfmr.wte.*) is excluded from the T3 GGUF.
+        is_t3_tensor = (
+            (name.startswith("tfmr.") and name != "tfmr.wte.weight")
+            or name == "speech_emb.weight"
+            or name.startswith("speech_head.")
+        )
+        if not is_t3_tensor:
+            return
+
+        # GPT-2 Conv1D weight transpose (NOT biases)
+        if name.endswith((".c_attn.weight", ".c_proj.weight", ".c_fc.weight")):
+            data_torch = data_torch.transpose(1, 0)
+
+        if name.startswith("tfmr."):
+            name = "transformer." + name[len("tfmr."):]
+        elif name == "speech_emb.weight":
+            name = "transformer.wte.weight"
+        elif name.startswith("speech_head."):
+            name = "lm_head." + name[len("speech_head."):]
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("ChatterboxTTSForGeneration")
+class ChatterboxMmprojModel(MmprojModel):
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    def __init__(self, *args, **kwargs):
+        # Skip MmprojModel.__init__ — its block_count auto-detect requires a
+        # uniform `num_hidden_layers`-style hparam in audio_config, which
+        # chatterbox doesn't have (its audio side is heterogeneous: VE has 3
+        # LSTM layers, S3Tok / CAMPPlus / flow / HiFT each have their own).
+        # We replicate the necessary MmprojModel setup manually with a
+        # hardcoded upper-bound block_count.
+        ModelBase.__init__(self, *args, **kwargs)
+
+        import copy
+        if "text_config" not in self.hparams:
+            self.hparams["text_config"] = {}
+        if "audio_config" not in self.hparams:
+            self.hparams["audio_config"] = {}
+
+        # n_embd_text is the dim that mmproj outputs project INTO — same as T3's
+        # hidden_size (1024 for chatterbox-turbo).
+        text_cfg = {**self.hparams, **self.hparams["text_config"]}
+        self.n_embd_text = text_cfg.get("hidden_size", text_cfg.get("n_embd", 0))
+        assert self.n_embd_text > 0, "text_config.hidden_size missing"
+
+        self.global_config = copy.deepcopy(self.hparams)
+        self.hparams_vision = None
+        self.hparams_audio = self.global_config.get("audio_config")
+        assert self.hparams_audio is not None, "audio_config missing"
+        self.hparams = self.hparams_audio
+
+        # Upper bound for `.{bid}` expansion across all subsystems.
+        # Per-subsystem maxima:
+        #   VE LSTM layers              = 3
+        #   S3Tok FSMN blocks           ≈ 6
+        #   CAMPPlus head BasicBlocks   = 4
+        #   CAMPPlus xvector tdnnd      ≤ 24 (deepest block has 24)
+        #   HiFT regular resblocks      = 9
+        #   Flow encoder layers         = 6  (up_encoders = 4)
+        #   Flow decoder mid_blocks     = 12
+        #   Flow decoder MID transformers (compound bid = outer*4 + inner) = 48
+        # 64 covers everything chatterbox has with comfortable headroom.
+        self.block_count = 64
+        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
+
+        # The synthesized chatterbox HF dump has no preprocessor_config.json /
+        # processor_config.json — those files are vision-only conventions.
+        self.preprocessor_config = {}
+
+    def set_gguf_parameters(self):
+        # Full override — base impl calls find_aparam for intermediate_size /
+        # num_attention_heads, neither of which chatterbox's audio side has.
+        self.gguf_writer.add_file_type(self.ftype)
+        self.gguf_writer.add_clip_has_audio_encoder(True)
+        self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
+        self.gguf_writer.add_audio_embedding_length(self.n_embd_text)
+
+        self.gguf_writer.add_bool("clip.has_audio_detokenizer", True)
+
+        # Chatterbox-specific audio KVs. Runtime / mtmd will consume these for
+        # resampling, mel STFT, token-rate ↔ time conversion, etc.
+        ac = self.hparams_audio
+        self.gguf_writer.add_uint32("chatterbox.audio.text_vocab_size",                ac["text_vocab_size"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_vocab_size",              ac["speech_vocab_size"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speaker_embed_size",             ac["speaker_embed_size"])
+        self.gguf_writer.add_uint32("chatterbox.audio.ve.hidden_size",                 ac["ve_hidden_size"])
+        self.gguf_writer.add_string("chatterbox.audio.speech_tokenizer.name",              ac["speech_tokenizer_name"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.rate",              ac["speech_tokenizer_rate"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.sample_rate",       ac["speech_tokenizer_sample_rate"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.num_mels",          ac["speech_tokenizer_num_mels"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.hidden_size",       ac["speech_tokenizer_hidden_size"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.num_heads",         ac["speech_tokenizer_num_heads"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.num_blocks",        ac["speech_tokenizer_num_blocks"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.context_length",    ac["speech_tokenizer_context_length"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.fsmn_kernel_size",  ac["speech_tokenizer_fsmn_kernel_size"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.fsq_dim",           ac["speech_tokenizer_fsq_dim"])
+        self.gguf_writer.add_uint32("chatterbox.audio.speech_tokenizer.fsq_levels",        ac["speech_tokenizer_fsq_levels"])
+        self.gguf_writer.add_uint32("chatterbox.audio.ve.sample_rate",                     ac["voice_encoder_sample_rate"])
+        self.gguf_writer.add_uint32("chatterbox.audio.ve.num_mels",                    ac["voice_encoder_num_mels"])
+        self.gguf_writer.add_uint32("chatterbox.audio.ve.n_fft",                       ac["voice_encoder_n_fft"])
+        self.gguf_writer.add_uint32("chatterbox.audio.ve.hop_size",                    ac["voice_encoder_hop_size"])
+        self.gguf_writer.add_uint32("chatterbox.audio.ve.win_size",                    ac["voice_encoder_win_size"])
+        self.gguf_writer.add_uint32("chatterbox.audio.s3gen.sample_rate",              ac["s3gen_sample_rate"])
+        self.gguf_writer.add_uint32("chatterbox.audio.s3gen.cond_max_len_sec",         ac["s3gen_cond_max_len_sec"])
+        self.gguf_writer.add_uint32("chatterbox.audio.enc.cond_len_sec",               ac["enc_cond_len_sec"])
+
+    # ---------- CAMPPlus helpers ----------
+
+    # PyTorch BatchNorm{1,2}d default eps. Source code uses the default everywhere.
+    _BN_EPS = 1e-5
+
+    def _bn_fold_dispatch(
+        self,
+        hf_prefix: str,            # opaque key for buffering, must be unique per BN site
+        suffix: str,                # one of {weight, bias, running_mean, running_var, num_batches_tracked}
+        data: Tensor,
+        canonical_prefix: str,      # GGUF canonical name without ".weight" / ".bias" suffix
+        affine: bool = True,
+    ) -> Iterable[tuple[str, Tensor]]:
+        """Fold a BatchNorm into a single affine (gamma', beta').
+
+        BN inference: y = gamma*(x-mu)/sqrt(var+eps) + beta
+                        = gamma'*x + beta'
+        where gamma' = gamma / sqrt(var+eps), beta' = beta - gamma*mu / sqrt(var+eps).
+        For affine=False BN, substitute gamma=1, beta=0.
+
+        modify_tensors is called once per HF tensor, so we buffer until all
+        required components have arrived, then fold and yield both fused tensors.
+        num_batches_tracked is always dropped (training-only metadata).
+        """
+        if suffix == "num_batches_tracked":
+            return
+        if not hasattr(self, "_bn_buf"):
+            self._bn_buf: dict[str, dict[str, Tensor]] = {}
+        self._bn_buf.setdefault(hf_prefix, {})[suffix] = data
+
+        buf = self._bn_buf[hf_prefix]
+        needed = {"running_mean", "running_var"}
+        if affine:
+            needed |= {"weight", "bias"}
+        if not needed.issubset(buf.keys()):
+            return  # BN site incomplete — wait for more components
+
+        self._bn_buf.pop(hf_prefix)
+
+        # Cast to F32 for the fold math (running_var can be tiny — F16 would lose precision).
+        rm = buf["running_mean"].float()
+        rv = buf["running_var"].float()
+        inv_std = (rv + self._BN_EPS).rsqrt()
+        if affine:
+            w = buf["weight"].float()
+            b = buf["bias"].float()
+            gamma_fused = w * inv_std
+            beta_fused  = b - w * rm * inv_std
+        else:
+            gamma_fused = inv_std
+            beta_fused  = -rm * inv_std
+
+        # Yield through super() so map_tensor_name validates the canonical against the schema.
+        yield from super().modify_tensors(gamma_fused, canonical_prefix + ".weight", None)
+        yield from super().modify_tensors(beta_fused,  canonical_prefix + ".bias",  None)
+
+    def _handle_campplus_tensor(self, data_torch: Tensor, sub: str) -> Iterable[tuple[str, Tensor]]:
+        """Dispatch a single CAMPPlus tensor (HF name with the leading 'speaker_encoder.' already stripped)."""
+
+        # ----- HEAD (FCM ResNet stem) -----
+
+        # head.bn{1,2}.* — standalone BatchNorms (Conv→BN→ReLU pattern)
+        m = re.match(r"^head\.(bn[12])\.(weight|bias|running_mean|running_var|num_batches_tracked)$", sub)
+        if m is not None:
+            which, suffix = m.group(1), m.group(2)
+            yield from self._bn_fold_dispatch(
+                hf_prefix=f"head.{which}",
+                suffix=suffix,
+                data=data_torch,
+                canonical_prefix=f"a.campplus.head.{which}",
+            )
+            return
+
+        # head.conv{1,2}.weight — bias=False in source, so weight only
+        m = re.match(r"^head\.(conv[12])\.weight$", sub)
+        if m is not None:
+            hf_name = f"speaker_encoder.head.{m.group(1)}.weight"
+            yield from super().modify_tensors(data_torch, hf_name, None)
+            return
+
+        # head.layer{L}.{S}.* — BasicResBlock. Flatten (L,S) → bid in [0,3].
+        # layer1.0=0, layer1.1=1, layer2.0=2, layer2.1=3.
+        m = re.match(r"^head\.layer([12])\.([01])\.(.+)$", sub)
+        if m is not None:
+            L, S, rest = int(m.group(1)), int(m.group(2)), m.group(3)
+            bid = (L - 1) * 2 + S
+
+            # BasicBlock BNs: bn1, bn2
+            m2 = re.match(r"^(bn[12])\.(weight|bias|running_mean|running_var|num_batches_tracked)$", rest)
+            if m2 is not None:
+                which, suffix = m2.group(1), m2.group(2)
+                yield from self._bn_fold_dispatch(
+                    hf_prefix=f"head.basic.{bid}.{which}",
+                    suffix=suffix,
+                    data=data_torch,
+                    canonical_prefix=f"a.campplus.head.basic.{bid}.{which}",
+                )
+                return
+
+            # BasicBlock convs: conv1, conv2 (bias=False)
+            m2 = re.match(r"^(conv[12])\.weight$", rest)
+            if m2 is not None:
+                # Rename HF→canonical for the flatten; alias for this enum is empty tuple.
+                yield from super().modify_tensors(
+                    data_torch, f"a.campplus.head.basic.{bid}.{m2.group(1)}.weight", None,
+                )
+                return
+
+            # Shortcut: Sequential(Conv2d, BatchNorm2d) — index 0 is conv, index 1 is BN.
+            # Only present on bid=0 and bid=2 (the stride=2 sub-blocks).
+            if rest == "shortcut.0.weight":
+                yield from super().modify_tensors(
+                    data_torch, f"a.campplus.head.basic.{bid}.shortcut.conv.weight", None,
+                )
+                return
+            m2 = re.match(r"^shortcut\.1\.(weight|bias|running_mean|running_var|num_batches_tracked)$", rest)
+            if m2 is not None:
+                yield from self._bn_fold_dispatch(
+                    hf_prefix=f"head.basic.{bid}.shortcut.bn",
+                    suffix=m2.group(1),
+                    data=data_torch,
+                    canonical_prefix=f"a.campplus.head.basic.{bid}.shortcut.bn",
+                )
+                return
+
+            logger.warning(f"[chatterbox-mmproj] unrecognized head.layer tensor: speaker_encoder.{sub}")
+            return
+
+        # ----- XVECTOR (TDNN backbone) -----
+
+        # xvector.tdnn.linear.weight (bias=False)
+        if sub == "xvector.tdnn.linear.weight":
+            yield from super().modify_tensors(data_torch, "speaker_encoder.xvector.tdnn.linear.weight", None)
+            return
+        # xvector.tdnn.nonlinear.batchnorm.*  →  A_CAMPPLUS_XV_TDNN_BN
+        m = re.match(r"^xvector\.tdnn\.nonlinear\.batchnorm\.(weight|bias|running_mean|running_var|num_batches_tracked)$", sub)
+        if m is not None:
+            yield from self._bn_fold_dispatch(
+                hf_prefix="xv.tdnn.bn",
+                suffix=m.group(1),
+                data=data_torch,
+                canonical_prefix="a.campplus.xv.tdnn.bn",
+            )
+            return
+
+        # xvector.transit{T}.linear.weight (T in {1,2,3}; bias=False per CAMPPlus init)
+        m = re.match(r"^xvector\.(transit[123])\.linear\.weight$", sub)
+        if m is not None:
+            yield from super().modify_tensors(
+                data_torch, f"speaker_encoder.xvector.{m.group(1)}.linear.weight", None,
+            )
+            return
+        # xvector.transit{T}.nonlinear.batchnorm.*
+        m = re.match(r"^xvector\.transit([123])\.nonlinear\.batchnorm\.(weight|bias|running_mean|running_var|num_batches_tracked)$", sub)
+        if m is not None:
+            T, suffix = int(m.group(1)), m.group(2)
+            yield from self._bn_fold_dispatch(
+                hf_prefix=f"xv.transit.{T}.bn",
+                suffix=suffix,
+                data=data_torch,
+                canonical_prefix=f"a.campplus.xv.transit.{T}.bn",
+            )
+            return
+
+        # xvector.dense.linear.weight (bias=False)
+        if sub == "xvector.dense.linear.weight":
+            yield from super().modify_tensors(data_torch, "speaker_encoder.xvector.dense.linear.weight", None)
+            return
+        # xvector.dense.nonlinear.batchnorm.* — affine=False (only running_mean / running_var / num_batches_tracked)
+        m = re.match(r"^xvector\.dense\.nonlinear\.batchnorm\.(running_mean|running_var|num_batches_tracked)$", sub)
+        if m is not None:
+            yield from self._bn_fold_dispatch(
+                hf_prefix="xv.dense.bn",
+                suffix=m.group(1),
+                data=data_torch,
+                canonical_prefix="a.campplus.xv.dense.bn",
+                affine=False,
+            )
+            return
+
+        # xvector.out_nonlinear.batchnorm.*  →  A_CAMPPLUS_XV_OUT_BN
+        m = re.match(r"^xvector\.out_nonlinear\.batchnorm\.(weight|bias|running_mean|running_var|num_batches_tracked)$", sub)
+        if m is not None:
+            yield from self._bn_fold_dispatch(
+                hf_prefix="xv.out.bn",
+                suffix=m.group(1),
+                data=data_torch,
+                canonical_prefix="a.campplus.xv.out.bn",
+            )
+            return
+
+        # xvector.block{B}.tdnnd{N}.*  (B in {1,2,3}, N is 1-based)
+        m = re.match(r"^xvector\.(block[123])\.(tdnnd\d+)\.(.+)$", sub)
+        if m is not None:
+            B_str, N_str, rest = m.group(1), m.group(2), m.group(3)  # e.g. ("block1", "tdnnd7", "...")
+            B = int(B_str[len("block"):])
+            N = int(N_str[len("tdnnd"):])
+
+            # tdnnd{N}.linear1.weight (bias=False)
+            if rest == "linear1.weight":
+                yield from super().modify_tensors(
+                    data_torch, f"speaker_encoder.xvector.{B_str}.{N_str}.linear1.weight", None,
+                )
+                return
+
+            # tdnnd{N}.nonlinear{K}.batchnorm.* (K in {1,2})  →  bn{K}
+            m2 = re.match(r"^nonlinear([12])\.batchnorm\.(weight|bias|running_mean|running_var|num_batches_tracked)$", rest)
+            if m2 is not None:
+                K, suffix = m2.group(1), m2.group(2)
+                yield from self._bn_fold_dispatch(
+                    hf_prefix=f"xv.block.{B}.tdnnd.{N}.bn{K}",
+                    suffix=suffix,
+                    data=data_torch,
+                    canonical_prefix=f"a.campplus.xv.block.{B}.tdnnd.{N}.bn{K}",
+                )
+                return
+
+            # tdnnd{N}.cam_layer.{linear1,linear2,linear_local}.{weight,bias}
+            #   linear_local is bias=False (Conv1d default in CAMLayer constructor: bias=False)
+            #   linear1, linear2 are bias=True (Conv1d default)
+            m2 = re.match(r"^cam_layer\.(linear1|linear2|linear_local)\.(weight|bias)$", rest)
+            if m2 is not None:
+                # Pass HF name through; alias is templated per outer block.
+                yield from super().modify_tensors(
+                    data_torch, f"speaker_encoder.xvector.{B_str}.{N_str}.cam_layer.{m2.group(1)}.{m2.group(2)}", None,
+                )
+                return
+
+            logger.warning(f"[chatterbox-mmproj] unrecognized xvector.block tensor: speaker_encoder.{sub}")
+            return
+
+        logger.warning(f"[chatterbox-mmproj] unrecognized speaker_encoder tensor: speaker_encoder.{sub}")
+
+    # ---------- end CAMPPlus helpers ----------
+
+    # ---------- HiFT helpers ----------
+
+    def _wn_fuse_dispatch(
+        self,
+        hf_prefix: str,             # opaque buffering key, unique per weight_norm site
+        which: str,                  # "original0" (magnitude g) or "original1" (direction v)
+        data: Tensor,
+        canonical: str,              # canonical name without ".weight" — e.g. "a.hift.conv_pre"
+    ) -> Iterable[tuple[str, Tensor]]:
+        """Fuse a PyTorch weight_norm parametrization into a single .weight tensor.
+
+        weight_norm reconstructs the actual weight as
+            w = g * v / ||v||
+        where the L2 norm is computed across every dim except dim 0 (the dim
+        weight_norm preserves; default `dim=0` is used everywhere in HiFT for
+        both Conv1d and ConvTranspose1d). g has shape [out, 1, 1] for Conv1d
+        and [in, 1, 1] for ConvTranspose1d (the "preserved" dim is per-channel
+        regardless of in/out orientation), so the math is identical: normalize
+        v across all dims >= 1, then scale by g.
+        """
+        if not hasattr(self, "_wn_buf"):
+            self._wn_buf: dict[str, dict[str, Tensor]] = {}
+        self._wn_buf.setdefault(hf_prefix, {})[which] = data
+        buf = self._wn_buf[hf_prefix]
+        if "original0" not in buf or "original1" not in buf:
+            return  # incomplete — wait for the other half
+        self._wn_buf.pop(hf_prefix)
+
+        g = buf["original0"].float()
+        v = buf["original1"].float()
+        norm = v.norm(dim=tuple(range(1, v.ndim)), keepdim=True)
+        # PyTorch's weight_norm adds no epsilon; norms here are never close to zero in practice.
+        w = (g * (v / norm)).to(buf["original1"].dtype)
+
+        yield from super().modify_tensors(w, canonical + ".weight", None)
+
+    def _handle_hift_tensor(self, data_torch: Tensor, sub: str) -> Iterable[tuple[str, Tensor]]:
+        """Dispatch a single HiFT tensor (HF name with the leading 'mel2wav.' already stripped).
+
+        Three categories:
+          - weight_norm'd layer: split into (bias passthrough) and (original{0,1} → fused .weight)
+          - plain layer: pass HF name through; alias system resolves it
+          - Snake alpha: full-key alias resolves directly
+        """
+        # ----- Standalone weight_norm'd Conv1d's (conv_pre, conv_post) -----
+        m = re.match(r"^(conv_pre|conv_post)\.(.+)$", sub)
+        if m is not None:
+            layer, suffix = m.group(1), m.group(2)
+            hf_alias = f"mel2wav.{layer}"               # what tensor_mapping has registered
+            canonical = f"a.hift.{layer}"               # canonical name post-fusion
+            if suffix == "bias":
+                yield from super().modify_tensors(data_torch, hf_alias + ".bias", None)
+                return
+            m2 = re.match(r"^parametrizations\.weight\.(original0|original1)$", suffix)
+            if m2 is not None:
+                yield from self._wn_fuse_dispatch(
+                    hf_prefix=hf_alias, which=m2.group(1), data=data_torch, canonical=canonical,
+                )
+                return
+            logger.warning(f"[chatterbox-mmproj] unrecognized HiFT {layer} suffix: {suffix}")
+            return
+
+        # ----- m_source.l_linear (plain nn.Linear, no weight_norm) -----
+        if sub.startswith("m_source.l_linear."):
+            yield from super().modify_tensors(data_torch, f"mel2wav.{sub}", None)
+            return
+
+        # ----- f0_predictor.classifier (plain nn.Linear) -----
+        if sub.startswith("f0_predictor.classifier."):
+            yield from super().modify_tensors(data_torch, f"mel2wav.{sub}", None)
+            return
+
+        # ----- f0_predictor.condnet.{N}: HF indices 0,2,4,6,8 → compress to 0..4 -----
+        m = re.match(r"^f0_predictor\.condnet\.(\d+)\.(.+)$", sub)
+        if m is not None:
+            hf_idx, suffix = int(m.group(1)), m.group(2)
+            new_idx = hf_idx // 2   # 0→0, 2→1, 4→2, 6→3, 8→4
+            hf_alias  = f"mel2wav.f0_predictor.condnet.{new_idx}"
+            canonical = f"a.hift.f0.condnet.{new_idx}"
+            if suffix == "bias":
+                yield from super().modify_tensors(data_torch, hf_alias + ".bias", None)
+                return
+            m2 = re.match(r"^parametrizations\.weight\.(original0|original1)$", suffix)
+            if m2 is not None:
+                yield from self._wn_fuse_dispatch(
+                    hf_prefix=hf_alias, which=m2.group(1), data=data_torch, canonical=canonical,
+                )
+                return
+            logger.warning(f"[chatterbox-mmproj] unrecognized HiFT f0 condnet suffix: {suffix}")
+            return
+
+        # ----- ups.{N}: weight_norm'd ConvTranspose1d (3 layers) -----
+        m = re.match(r"^ups\.(\d+)\.(.+)$", sub)
+        if m is not None:
+            idx, suffix = int(m.group(1)), m.group(2)
+            hf_alias  = f"mel2wav.ups.{idx}"
+            canonical = f"a.hift.ups.{idx}"
+            if suffix == "bias":
+                yield from super().modify_tensors(data_torch, hf_alias + ".bias", None)
+                return
+            m2 = re.match(r"^parametrizations\.weight\.(original0|original1)$", suffix)
+            if m2 is not None:
+                yield from self._wn_fuse_dispatch(
+                    hf_prefix=hf_alias, which=m2.group(1), data=data_torch, canonical=canonical,
+                )
+                return
+            logger.warning(f"[chatterbox-mmproj] unrecognized HiFT ups suffix: {suffix}")
+            return
+
+        # ----- source_downs.{N}: plain Conv1d (no weight_norm) -----
+        if re.match(r"^source_downs\.\d+\.(weight|bias)$", sub):
+            yield from super().modify_tensors(data_torch, f"mel2wav.{sub}", None)
+            return
+
+        # ----- Regular resblocks (mel2wav.resblocks.{B}.*) -----
+        # ----- Source  resblocks (mel2wav.source_resblocks.{B}.*) -----
+        # Both have identical internal layout (convs1/convs2 + activations1/activations2),
+        # only the canonical prefix and HF block-name differ.
+        m = re.match(r"^(resblocks|source_resblocks)\.(\d+)\.(.+)$", sub)
+        if m is not None:
+            block_kind, B_str, rest = m.group(1), m.group(2), m.group(3)
+            B = int(B_str)
+            # canonical prefix: "res" for resblocks, "sres" for source_resblocks
+            cprefix = "res" if block_kind == "resblocks" else "sres"
+            hf_block = f"mel2wav.{block_kind}.{B}"
+
+            # Snake alpha: full-key passthrough
+            m2 = re.match(r"^(activations[12])\.([0-2])\.alpha$", rest)
+            if m2 is not None:
+                # alias is registered as the full HF name including .alpha
+                yield from super().modify_tensors(data_torch, f"{hf_block}.{rest}", None)
+                return
+
+            # Conv1d (weight_norm'd): convs{1,2}.{0,1,2}.{bias | parametrizations.weight.original{0,1}}
+            m2 = re.match(r"^(convs[12])\.([0-2])\.(.+)$", rest)
+            if m2 is not None:
+                conv_set, inner_idx, suffix = m2.group(1), m2.group(2), m2.group(3)
+                hf_alias  = f"{hf_block}.{conv_set}.{inner_idx}"
+                canonical = f"a.hift.{cprefix}.{B}.{conv_set}.{inner_idx}"
+                if suffix == "bias":
+                    yield from super().modify_tensors(data_torch, hf_alias + ".bias", None)
+                    return
+                m3 = re.match(r"^parametrizations\.weight\.(original0|original1)$", suffix)
+                if m3 is not None:
+                    yield from self._wn_fuse_dispatch(
+                        hf_prefix=hf_alias, which=m3.group(1), data=data_torch, canonical=canonical,
+                    )
+                    return
+
+            logger.warning(f"[chatterbox-mmproj] unrecognized HiFT {block_kind} tensor: mel2wav.{sub}")
+            return
+
+        logger.warning(f"[chatterbox-mmproj] unrecognized HiFT tensor: mel2wav.{sub}")
+
+    # ---------- end HiFT helpers ----------
+
+    # ---------- Flow (CFM token→mel) helpers ----------
+
+    # Aliases for tensors that have full-key registrations (no .weight/.bias
+    # suffix stripping needed because the parameter name itself is the leaf).
+    # These need to be enumerated explicitly so the dispatcher knows NOT to
+    # try super().modify_tensors with a stripped suffix.
+    _FLOW_FULL_KEY_LEAVES = (
+        "pos_bias_u",
+        "pos_bias_v",
+    )
+
+    def _handle_flow_tensor(self, data_torch: Tensor, sub: str) -> Iterable[tuple[str, Tensor]]:
+        """Dispatch a single Flow tensor (HF name with leading 'flow.' stripped).
+
+        Pure pass-through (no fusion/folding). For BasicTransformerBlock contents
+        the source path "*_blocks.{outer}.1.{inner}.<rest>" is rewritten to a
+        synthetic key "__flow_dec_<grp>_tx_<outer*4+inner>.<rest>" which the
+        tensor_mapping resolves to the canonical "a.flow.dec.<grp>.tx.{bid}.<rest>".
+        """
+        # ----- top-level -----
+        if sub.startswith(("input_embedding.", "spk_embed_affine_layer.", "encoder_proj.")):
+            yield from super().modify_tensors(data_torch, f"flow.{sub}", None)
+            return
+
+        # ----- encoder.* -----
+        if sub.startswith("encoder."):
+            enc_sub = sub[len("encoder."):]
+
+            # encoder standalone (non-block) — alias system resolves directly
+            if enc_sub.startswith((
+                "embed.out.",
+                "up_embed.out.",
+                "after_norm.",
+                "pre_lookahead_layer.conv1.",
+                "pre_lookahead_layer.conv2.",
+                "up_layer.conv.",
+            )):
+                yield from super().modify_tensors(data_torch, f"flow.{sub}", None)
+                return
+
+            # encoder.{encoders|up_encoders}.{bid}.*
+            m = re.match(r"^(encoders|up_encoders)\.(\d+)\.(.+)$", enc_sub)
+            if m is not None:
+                rest = m.group(3)
+                # pos_bias_u / pos_bias_v are raw Parameters (no .weight/.bias);
+                # the alias is registered with the full leaf name including them.
+                if rest.endswith(self._FLOW_FULL_KEY_LEAVES):
+                    yield from super().modify_tensors(data_torch, f"flow.{sub}", None)
+                    return
+                # Everything else (LayerNorm, Linear) is the standard
+                # weight/bias pass-through via the {bid}-templated alias.
+                yield from super().modify_tensors(data_torch, f"flow.{sub}", None)
+                return
+
+            logger.warning(f"[chatterbox-mmproj] unrecognized flow encoder tensor: flow.{sub}")
+            return
+
+        # ----- decoder.estimator.* -----
+        if sub.startswith("decoder.estimator."):
+            est_sub = sub[len("decoder.estimator."):]
+
+            # time_embed_mixer.weight has no bias; alias registered with full key
+            if est_sub == "time_embed_mixer.weight":
+                yield from super().modify_tensors(data_torch, f"flow.{sub}", None)
+                return
+
+            # decoder standalone — direct pass-through
+            if est_sub.startswith((
+                "time_mlp.linear_1.",
+                "time_mlp.linear_2.",
+                "final_block.block.0.",
+                "final_block.block.2.",
+                "final_proj.",
+            )):
+                yield from super().modify_tensors(data_torch, f"flow.{sub}", None)
+                return
+
+            # {down|mid|up}_blocks.{outer}.{sub_idx}.*
+            m = re.match(r"^(down_blocks|mid_blocks|up_blocks)\.(\d+)\.(\d+)\.(.+)$", est_sub)
+            if m is not None:
+                grp_full, O_str, S_str, rest = m.group(1), m.group(2), m.group(3), m.group(4)
+                O, S = int(O_str), int(S_str)
+                grp = grp_full[:-len("_blocks")]  # "down" | "mid" | "up"
+
+                if S == 0:
+                    # Resnet sub-block — direct alias resolution
+                    yield from super().modify_tensors(data_torch, f"flow.{sub}", None)
+                    return
+
+                if S == 1:
+                    # Transformer ModuleList: re-encode (outer, inner) into a single
+                    # compound bid and synthesise the alias key.
+                    m2 = re.match(r"^(\d+)\.(.+)$", rest)
+                    if m2 is None:
+                        logger.warning(f"[chatterbox-mmproj] malformed flow transformer tensor: flow.{sub}")
+                        return
+                    I, tail = int(m2.group(1)), m2.group(2)
+                    compound = O * 4 + I    # 4 = n_blocks per BasicTransformerBlock list
+                    synthetic = f"__flow_dec_{grp}_tx_{compound}.{tail}"
+                    yield from super().modify_tensors(data_torch, synthetic, None)
+                    return
+
+                if S == 2:
+                    # Downsample / upsample (down/up only — mid never has S=2)
+                    if grp == "mid":
+                        logger.warning(f"[chatterbox-mmproj] unexpected mid_blocks sub=2: flow.{sub}")
+                        return
+                    yield from super().modify_tensors(data_torch, f"flow.{sub}", None)
+                    return
+
+                logger.warning(f"[chatterbox-mmproj] unrecognized flow {grp_full} sub-index {S}: flow.{sub}")
+                return
+
+            logger.warning(f"[chatterbox-mmproj] unrecognized flow decoder tensor: flow.{sub}")
+            return
+
+        logger.warning(f"[chatterbox-mmproj] unrecognized flow tensor: flow.{sub}")
+
+    # ---------- end Flow helpers ----------
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # ===== Drop T3-side tensors (belong in the T3 GGUF, not here) =====
+        if name.startswith(("tfmr.", "speech_emb.", "speech_head.", "text_head.")):
+            return
+
+        # ===== Drop training-only / buffer tensors =====
+        # similarity_* : VE training loss head (unused at inference).
+        # _mel_filters / window : precomputed buffers chatterbox recomputes at runtime.
+        if name in ("similarity_bias", "similarity_weight",
+                    "tokenizer._mel_filters", "tokenizer.window"):
+            return
+
+        # ===== Already-schemaed subsystems =====
+
+        # text_emb.weight  →  A_MM_TEXT_EMBEDDING  (alias "text_emb")
+        if name == "text_emb.weight":
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        # cond_enc.spkr_enc.{weight,bias}  →  A_MMPROJ_FC  (alias "cond_enc.spkr_enc")
+        if name.startswith("cond_enc.spkr_enc."):
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        # VoiceEncoder LSTM — translate PyTorch nn.LSTM naming
+        # ("lstm.weight_ih_lN" / "lstm.bias_{ih,hh}_lN") into our schema's
+        # "lstm.{ih,hh}.{bid}.{weight,bias}" form, which resolves via the
+        # alias "lstm.{ih,hh}.{bid}" + suffix-strip → A_ENC_LSTM_{IH,HH}.
+        m = re.match(r"lstm\.(weight|bias)_(ih|hh)_l(\d+)$", name)
+        if m is not None:
+            kind, ihhh, layer = m.group(1), m.group(2), m.group(3)
+            new_name = f"lstm.{ihhh}.{layer}.{kind}"
+            yield from super().modify_tensors(data_torch, new_name, int(layer))
+            return
+
+        # VE proj.{weight,bias}  →  A_ENC_LSTM_PROJ  (alias "proj")
+        if name in ("proj.weight", "proj.bias"):
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        # ===== S3TokenizerV2 (tokenizer.*) =====
+        # The encoder (Whisper-style with FSMN attn) reuses existing A_ENC_*
+        # entries (CONV1D / ATTN_Q/K/V / OUTPUT / INPUT_NORM / FFN_NORM/UP/DOWN).
+        # The FSMN block (depthwise Conv1d inside attention) and the FSQ
+        # quantizer projection use the chatterbox-specific A_ENC_FSMN_CONV
+        # and A_ENC_FSQ_PROJ entries. The HF aliases for all of the above are
+        # registered in gguf-py/gguf/tensor_mapping.py and resolve via the
+        # standard suffix-strip path, so a plain dispatch is sufficient here.
+        if name.startswith(("tokenizer.encoder.", "tokenizer.quantizer.")):
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        # ===== CAMPPlus speaker encoder (speaker_encoder.*) =====
+        # Dispatch into the dedicated handler. Includes BN-fold (gamma/beta/mu/var → gamma'/beta'),
+        # head BasicBlock flatten (layer{L}.{S} → bid 0..3), and per-outer xvector block routing.
+        if name.startswith("speaker_encoder."):
+            yield from self._handle_campplus_tensor(data_torch, name[len("speaker_encoder."):])
+            return
+
+        # ===== HiFT vocoder ("mel2wav.*") =====
+        # Dispatch into the HiFT handler. Performs weight_norm fusion
+        # (g, v → w) for parametrized layers, condnet index compression
+        # (0,2,4,6,8 → 0..4), and pass-through for plain layers and Snake
+        # alphas.
+        if name.startswith("mel2wav."):
+            yield from self._handle_hift_tensor(data_torch, name[len("mel2wav."):])
+            return
+
+        # ===== Flow (CFM token→mel, "flow.*") =====
+        # Dispatch into the Flow handler. Direct pass-through for everything
+        # except BasicTransformerBlock contents, where (outer, inner) indices
+        # are folded into a single compound bid for the canonical name.
+        if name.startswith("flow."):
+            yield from self._handle_flow_tensor(data_torch, name[len("flow."):])
+            return
+
+        # Catch-all — anything we didn't anticipate.
+        logger.warning(f"[chatterbox-mmproj] unrecognized tensor (skipped): {name}")
+
+
 ###### CONVERSION LOGIC ######
 
 
