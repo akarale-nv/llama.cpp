@@ -10,6 +10,12 @@ Subcommands:
   s3gen   Convert an S3Gen vocoder checkpoint to a single GGUF file:
             - S3Gen GGUF        (default: S3Gen-<params>-<quant>.gguf)
 
+  ve      Convert the reference VoiceEncoder (ve.safetensors) and the
+          S3TokenizerV2 weights (extracted from the S3Gen checkpoint) to
+          a single GGUF file used by the C++ runtime to compute the
+          speaker embedding and prompt speech-token IDs at inference time:
+            - Voice encoder GGUF (default: voice_encoder.gguf)
+
 Usage:
   python convert_chatterbox_to_gguf.py all chatterbox-turbo/ --quantize f16
 
@@ -18,6 +24,9 @@ Usage:
 
   python convert_chatterbox_to_gguf.py s3gen path/to/s3gen_model.safetensors \\
       --quantize f16 --output s3gen_f16.gguf
+
+  python convert_chatterbox_to_gguf.py ve chatterbox-turbo/ \\
+      --output voice_encoder.gguf
 
 Dependencies: pip install gguf safetensors transformers torch
 """
@@ -547,6 +556,365 @@ def convert_s3gen_tensor_name(pytorch_name: str) -> str:
 
 
 # =============================================================================
+# VoiceEncoder + S3 Tokenizer (voice_encoder.gguf) helpers
+# =============================================================================
+
+
+def convert_voice_encoder_tensor_name(pytorch_name: str) -> str | None:
+    """Map VE / S3TokenizerV2 PyTorch names to the upstream mmproj `a.*` audio
+    tensor-naming convention used by clip.cpp (see tools/mtmd/clip-impl.h and
+    gguf-py/gguf/constants.py audio MODEL_TENSOR_NAMES).
+
+    VoiceEncoder (VE)  -- from ve.safetensors:
+      lstm.weight_ih_l{0,1,2}    -> a.lstm.ih.{0,1,2}.weight
+      lstm.weight_hh_l{0,1,2}    -> a.lstm.hh.{0,1,2}.weight
+      lstm.bias_ih_l{0,1,2}      -> a.lstm.ih.{0,1,2}.bias
+      lstm.bias_hh_l{0,1,2}      -> a.lstm.hh.{0,1,2}.bias
+      proj.{weight,bias}         -> a.lstm.proj.{weight,bias}
+      similarity_{weight,bias}   -> skipped (training-only, cosine-sim scale)
+
+    S3 TokenizerV2 (S3Tok) -- from s3gen.safetensors under tokenizer.*:
+      tokenizer._mel_filters                                  -> a.s3tok.mel_filters
+      tokenizer.encoder.conv1.{weight,bias}                   -> a.conv1d.0.{weight,bias}
+      tokenizer.encoder.conv2.{weight,bias}                   -> a.conv1d.1.{weight,bias}
+      tokenizer.encoder.blocks.N.attn.query.{weight,bias}     -> a.blk.N.attn_q.{weight,bias}
+      tokenizer.encoder.blocks.N.attn.key.weight              -> a.blk.N.attn_k.weight    (no bias)
+      tokenizer.encoder.blocks.N.attn.value.{weight,bias}     -> a.blk.N.attn_v.{weight,bias}
+      tokenizer.encoder.blocks.N.attn.out.{weight,bias}       -> a.blk.N.attn_out.{weight,bias}
+      tokenizer.encoder.blocks.N.attn.fsmn_block.weight       -> a.blk.N.fsmn_conv.weight
+      tokenizer.encoder.blocks.N.attn_ln.{weight,bias}        -> a.blk.N.ln1.{weight,bias}
+      tokenizer.encoder.blocks.N.mlp_ln.{weight,bias}         -> a.blk.N.ln2.{weight,bias}
+      tokenizer.encoder.blocks.N.mlp.0.{weight,bias}          -> a.blk.N.ffn_up.{weight,bias}
+      tokenizer.encoder.blocks.N.mlp.2.{weight,bias}          -> a.blk.N.ffn_down.{weight,bias}
+      tokenizer.quantizer._codebook.project_down.{weight,bias} -> a.quant.fsq.proj.{weight,bias}
+
+    Returns the GGUF tensor name, or None if the tensor should be skipped.
+    """
+    # -- VE training-only scaling (not used at inference) --
+    if pytorch_name in ("similarity_weight", "similarity_bias"):
+        return None
+
+    # -- VE: LSTM weights --
+    # PyTorch packs `weight_<ih|hh>_l<N>` / `bias_<ih|hh>_l<N>` into the parameter
+    # name itself.  Split it into a base `a.lstm.<ih|hh>.<N>` with a `.weight` /
+    # `.bias` suffix appended, matching constants.py's A_ENC_LSTM_IH / _HH.
+    if pytorch_name.startswith("lstm."):
+        suffix = pytorch_name[len("lstm."):]   # weight_ih_l0, bias_hh_l2, ...
+        if suffix.startswith("weight_") or suffix.startswith("bias_"):
+            kind, gate, layer = suffix.split("_", 2)   # ('weight', 'ih', 'l0')
+            return f"a.lstm.{gate}.{layer[1:]}.{kind}"   # a.lstm.ih.0.weight
+        return None  # unknown lstm parameter
+
+    # -- VE: projection (256 -> 256) --
+    if pytorch_name == "proj.weight":
+        return "a.lstm.proj.weight"
+    if pytorch_name == "proj.bias":
+        return "a.lstm.proj.bias"
+
+    # -- T3 cond_enc: speaker projection (256 -> n_channels=1024) --
+    # Only spkr_enc is exported here; emotion_adv_fc and perceiver_resampler
+    # are deferred and skipped to keep the mmproj focused on Phase 1.
+    if pytorch_name == "cond_enc.spkr_enc.weight":
+        return "a.cond_enc.spkr_enc.weight"
+    if pytorch_name == "cond_enc.spkr_enc.bias":
+        return "a.cond_enc.spkr_enc.bias"
+    if pytorch_name.startswith("cond_enc."):
+        return None  # skip other cond_enc submodules for now
+
+    # -- S3Tok: librosa mel filterbank buffer --
+    if pytorch_name == "tokenizer._mel_filters":
+        return "a.s3tok.mel_filters"
+
+    # -- S3Tok: encoder front-end Conv1d stages (downsample 100Hz -> 25Hz) --
+    if pytorch_name.startswith("tokenizer.encoder.conv1."):
+        return "a.conv1d.0." + pytorch_name[len("tokenizer.encoder.conv1."):]
+    if pytorch_name.startswith("tokenizer.encoder.conv2."):
+        return "a.conv1d.1." + pytorch_name[len("tokenizer.encoder.conv2."):]
+
+    # -- S3Tok: 6 transformer blocks (attn + FSMN depthwise + FFN + 2 LNs) --
+    if pytorch_name.startswith("tokenizer.encoder.blocks."):
+        rest = pytorch_name[len("tokenizer.encoder.blocks."):]
+        # rest looks like e.g. "0.attn.query.weight"
+        bid, sub = rest.split(".", 1)
+        blk_pref = f"a.blk.{bid}."
+
+        if sub.startswith("attn.fsmn_block."):
+            return blk_pref + "fsmn_conv." + sub[len("attn.fsmn_block."):]
+
+        if sub.startswith("attn.query."):
+            return blk_pref + "attn_q." + sub[len("attn.query."):]
+        if sub.startswith("attn.key."):
+            return blk_pref + "attn_k." + sub[len("attn.key."):]
+        if sub.startswith("attn.value."):
+            return blk_pref + "attn_v." + sub[len("attn.value."):]
+        if sub.startswith("attn.out."):
+            return blk_pref + "attn_out." + sub[len("attn.out."):]
+
+        if sub.startswith("attn_ln."):
+            return blk_pref + "ln1." + sub[len("attn_ln."):]
+        if sub.startswith("mlp_ln."):
+            return blk_pref + "ln2." + sub[len("mlp_ln."):]
+
+        # mlp.0 = first Linear (1280 -> 5120) = ffn_up
+        # mlp.1 = GELU activation (no parameters)
+        # mlp.2 = second Linear (5120 -> 1280) = ffn_down
+        if sub.startswith("mlp.0."):
+            return blk_pref + "ffn_up." + sub[len("mlp.0."):]
+        if sub.startswith("mlp.2."):
+            return blk_pref + "ffn_down." + sub[len("mlp.2."):]
+
+        return None
+
+    # -- S3Tok: FSQ codebook projection (1280 -> 8 channels) --
+    if pytorch_name.startswith("tokenizer.quantizer._codebook.project_down."):
+        return ("a.quant.fsq.proj."
+                + pytorch_name[len("tokenizer.quantizer._codebook.project_down."):])
+
+    return None
+
+
+def _write_voice_encoder_tensors(fout, state_dict: TensorDict, source: str,
+                                  keep_all_f32: bool = False) -> int:
+    """Write VE or S3Tok tensors to the open GGUF writer. Returns count written.
+
+    Precision policy: F16 for 2D+ weight matrices (LSTM/Linear/Conv kernels),
+    F32 for 1D parameters (biases, layer-norm scales) and for the precomputed
+    `_mel_filters` table (a fixed mathematical constant where precision matters).
+    The combined model is small (~30 MB) so quantization is unnecessary.
+
+    When ``keep_all_f32`` is True the caller wants everything in F32 (used e.g.
+    for FP16/FP32 accuracy comparisons against the PyTorch reference).
+    """
+    count = 0
+    for name in sorted(state_dict):
+        gguf_name = convert_voice_encoder_tensor_name(name)
+        if gguf_name is None:
+            print(f"  [{source}] skip {name}")
+            continue
+
+        value = state_dict[name]
+        if isinstance(value, torch.Tensor):
+            t = value.detach().cpu()
+            if t.dtype == torch.bfloat16:
+                t = t.to(torch.float32)
+            elif str(t.dtype).startswith("torch.float8"):
+                t = t.to(torch.float16)
+            array = t.numpy()
+        else:
+            try:
+                array = np.asarray(value)
+            except Exception:
+                print(f"  [{source}] skip non-tensor {name}")
+                continue
+
+        keep_f32 = keep_all_f32 or (
+            array.ndim == 1
+            or "bias" in gguf_name
+            or "norm" in gguf_name
+            or "mel_filters" in gguf_name
+        )
+        if keep_f32:
+            if array.dtype != np.float32:
+                array = array.astype(np.float32)
+        else:
+            if array.dtype != np.float16:
+                array = array.astype(np.float16)
+
+        print(f"  [{source}] {name} -> {gguf_name} {tuple(array.shape)} {array.dtype}")
+        fout.add_tensor(gguf_name, array)
+        count += 1
+
+    return count
+
+
+def _slaney_mel_filters(sr: int, n_fft: int, n_mels: int, fmin: float, fmax: float) -> np.ndarray:
+    """Pure-numpy port of librosa.filters.mel with htk=False, norm='slaney'.
+
+    Kept in-script so the conversion has no librosa dependency. Output matches
+    librosa's Slaney mel filter bit-for-bit for typical audio hparams.
+
+    Returns array of shape (n_mels, 1 + n_fft // 2).
+    """
+    # Slaney mel scale: linear below 1000Hz, log above.
+    f_sp = 200.0 / 3
+    min_log_hz = 1000.0
+    min_log_mel = (min_log_hz - 0.0) / f_sp
+    logstep = np.log(6.4) / 27.0
+
+    def hz_to_mel(f):
+        f = np.asarray(f, dtype=np.float64)
+        mel = f / f_sp
+        log_mask = f >= min_log_hz
+        # Guard against log(0) below min_log_hz. Result is masked-out below anyway.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            log_branch = min_log_mel + np.log(np.where(f > 0, f, 1.0) / min_log_hz) / logstep
+        mel = np.where(log_mask, log_branch, mel)
+        return mel
+
+    def mel_to_hz(m):
+        m = np.asarray(m, dtype=np.float64)
+        hz = f_sp * m
+        log_mask = m >= min_log_mel
+        hz = np.where(log_mask, min_log_hz * np.exp(logstep * (m - min_log_mel)), hz)
+        return hz
+
+    n_freqs = 1 + n_fft // 2
+    fft_freqs = np.linspace(0.0, sr / 2.0, n_freqs, dtype=np.float64)
+
+    mel_min = hz_to_mel(fmin)
+    mel_max = hz_to_mel(fmax)
+    mel_pts = np.linspace(mel_min, mel_max, n_mels + 2)
+    hz_pts = mel_to_hz(mel_pts)
+
+    # Triangular filters
+    fdiff = np.diff(hz_pts)
+    ramps = hz_pts[:, None] - fft_freqs[None, :]
+
+    weights = np.zeros((n_mels, n_freqs), dtype=np.float64)
+    for i in range(n_mels):
+        lower = -ramps[i]     / fdiff[i]
+        upper =  ramps[i + 2] / fdiff[i + 1]
+        weights[i] = np.maximum(0.0, np.minimum(lower, upper))
+
+    # Slaney normalization: 2.0 / (bin_width_hz)
+    enorm = 2.0 / (hz_pts[2 : n_mels + 2] - hz_pts[:n_mels])
+    weights *= enorm[:, None]
+
+    return weights
+
+
+def convert_voice_encoder_gguf(
+    ve_state_dict: TensorDict,
+    s3gen_state_dict: TensorDict,
+    t3_state_dict: TensorDict | None,
+    output_path: str,
+    keep_all_f32: bool = False,
+) -> bool:
+    """Convert VoiceEncoder + S3TokenizerV2 into a single voice_encoder.gguf.
+
+    At inference time the C++ runtime uses this GGUF to compute, from the
+    reference waveform:
+      - a 256-dim L2-normalized speaker embedding via the 3-layer LSTM + Linear
+        (consumed by T3's cond_enc.spkr_enc to build the conditioning prefix);
+      - a sequence of integer speech-token IDs via the 6-block FSMN/attention
+        encoder + FSQ project_down (consumed by T3's speech_emb to embed the
+        reference speech tokens into the conditioning prefix).
+
+    Source PyTorch hparams:
+      - chatterbox.models.voice_encoder.config.VoiceEncConfig
+      - chatterbox.models.s3tokenizer.s3tokenizer.{S3_SR,S3_HOP,S3_TOKEN_HOP,...}
+        and the underlying s3tokenizer.model_v2.ModelConfig defaults.
+    """
+    print(f"\n{'='*60}")
+    print(f"Converting VoiceEncoder + S3 Tokenizer")
+    print(f"{'='*60}")
+
+    fout = gguf.GGUFWriter(path=output_path, arch="voice_encoder")
+
+    fout.add_string("general.name", "Chatterbox Voice Encoder + S3 Tokenizer")
+    fout.add_string(
+        "general.description",
+        "Reference voice encoder (LSTM speaker encoder) + S3TokenizerV2 "
+        "(FSQ audio tokenizer) for Chatterbox TTS runtime conditioning",
+    )
+    fout.add_file_type(gguf.LlamaFileType.MOSTLY_F16)
+
+    # Match the upstream mmproj convention: a single `clip.has_audio_encoder`
+    # marker, the main audio transformer's hparams under `clip.audio.*`, and
+    # VE-specific hparams under the `clip.audio.ve.*` sub-namespace.
+    fout.add_bool("clip.has_audio_encoder", True)
+
+    # ---- S3Tokenizer (primary audio encoder under clip.audio.*) ----
+    # The S3Tok transformer is the "main" audio encoder of this mmproj-style
+    # file, so its core dims go into the canonical clip.audio.* slots that
+    # clip.cpp already understands (see tools/mtmd/clip-impl.h KEY_*).
+    fout.add_uint32 ("clip.audio.embedding_length",          1280)   # hidden_size
+    fout.add_uint32 ("clip.audio.feed_forward_length",       5120)   # MLP intermediate (4x)
+    fout.add_uint32 ("clip.audio.block_count",               6)      # transformer depth
+    fout.add_uint32 ("clip.audio.attention.head_count",      20)     # 1280 / 64
+    fout.add_float32("clip.audio.attention.layer_norm_epsilon", 1e-5)
+    fout.add_uint32 ("clip.audio.num_mel_bins",              128)
+    # S3Tok mel front-end + FSMN + FSQ extras (extend the clip.audio.* namespace
+    # rather than create a new top-level prefix).
+    fout.add_uint32 ("clip.audio.sample_rate",               16000)
+    fout.add_uint32 ("clip.audio.n_fft",                     400)
+    fout.add_uint32 ("clip.audio.hop_size",                  160)
+    fout.add_uint32 ("clip.audio.fsmn_kernel_size",          31)
+    fout.add_uint32 ("clip.audio.fsq_dim",                   8)
+    fout.add_uint32 ("clip.audio.fsq_levels",                3)
+    fout.add_uint32 ("clip.audio.vocab_size",                6561)   # 3^8
+    fout.add_uint32 ("clip.audio.token_rate",                25)     # tokens/sec
+    fout.add_uint32 ("clip.audio.token_hop",                 640)    # input samples per token
+
+    # ---- VoiceEncoder (sidecar LSTM speaker encoder under clip.audio.ve.*) ----
+    # Mel-spectrogram front-end fed to the VE LSTM (16 kHz, 40 mel bins).
+    fout.add_uint32 ("clip.audio.ve.num_mels",               40)
+    fout.add_uint32 ("clip.audio.ve.sample_rate",            16000)
+    fout.add_uint32 ("clip.audio.ve.n_fft",                  400)
+    fout.add_uint32 ("clip.audio.ve.hop_size",               160)
+    fout.add_uint32 ("clip.audio.ve.win_size",               400)
+    fout.add_uint32 ("clip.audio.ve.fmin",                   0)
+    fout.add_uint32 ("clip.audio.ve.fmax",                   8000)
+    fout.add_float32("clip.audio.ve.mel_power",              2.0)
+    fout.add_float32("clip.audio.ve.stft_magnitude_min",     1e-4)
+    fout.add_float32("clip.audio.ve.preemphasis",            0.0)
+    fout.add_bool   ("clip.audio.ve.normalized_mels",        False)
+    fout.add_string ("clip.audio.ve.mel_type",               "amp")
+    # LSTM + projection.
+    fout.add_uint32 ("clip.audio.ve.hidden_size",            256)
+    fout.add_uint32 ("clip.audio.ve.num_layers",             3)
+    fout.add_uint32 ("clip.audio.ve.speaker_embed_size",     256)
+    fout.add_uint32 ("clip.audio.ve.partial_frames",         160)
+    fout.add_bool   ("clip.audio.ve.final_relu",             True)
+
+    # ---- T3 cond_enc hparams (Phase 1: only speaker projection) ----
+    # The 256-dim VE output is projected to n_channels (T3 hidden size = 1024)
+    # via a single Linear layer. Other cond_enc submodules (emotion_adv_fc,
+    # perceiver_resampler) are deferred.
+    fout.add_uint32 ("clip.audio.cond_enc.n_channels",       1024)
+
+    # ---- VE mel filterbank (precomputed Slaney mel filter, librosa-compatible) ----
+    # Exported as a tensor so the C++ runtime doesn't have to reimplement
+    # librosa's exact Slaney mel formula. Shape [n_mels=40, n_freqs=201].
+    ve_mel_filters = _slaney_mel_filters(
+        sr=16000, n_fft=400, n_mels=40, fmin=0.0, fmax=8000.0
+    ).astype(np.float32)
+    print(f"  [VE] a.ve.mel_filters {ve_mel_filters.shape} {ve_mel_filters.dtype}")
+    fout.add_tensor("a.ve.mel_filters", ve_mel_filters)
+
+    # ---- VE tensors (from ve.safetensors) ----
+    print("Writing VE tensors...")
+    ve_count = _write_voice_encoder_tensors(fout, ve_state_dict, source="VE",
+                                            keep_all_f32=keep_all_f32)
+
+    # ---- S3Tok tensors (extracted from s3gen.safetensors by `tokenizer.` prefix) ----
+    print("Writing S3 Tokenizer tensors...")
+    s3tok_state = {k: v for k, v in s3gen_state_dict.items() if k.startswith("tokenizer.")}
+    s3tok_count = _write_voice_encoder_tensors(fout, s3tok_state, source="S3Tok",
+                                               keep_all_f32=keep_all_f32)
+
+    # ---- T3 cond_enc tensors (extracted from t3 checkpoint by `cond_enc.` prefix) ----
+    cond_enc_count = 0
+    if t3_state_dict is not None:
+        print("Writing T3 cond_enc tensors...")
+        cond_enc_state = {k: v for k, v in t3_state_dict.items() if k.startswith("cond_enc.")}
+        cond_enc_count = _write_voice_encoder_tensors(fout, cond_enc_state, source="CondEnc",
+                                                       keep_all_f32=keep_all_f32)
+    else:
+        print("Warning: no T3 checkpoint provided; cond_enc tensors will be missing.")
+
+    print(f"Total: {ve_count} VE + {s3tok_count} S3Tok + {cond_enc_count} cond_enc tensors")
+
+    print(f"Writing to {output_path}...")
+    fout.write_header_to_file()
+    fout.write_kv_data_to_file()
+    fout.write_tensors_to_file()
+    fout.close()
+    print("Voice encoder conversion complete!")
+    return True
+
+
+# =============================================================================
 # S3Gen conversion
 # =============================================================================
 
@@ -761,6 +1129,42 @@ def cmd_s3gen(args):
         sys.exit(1)
 
 
+def cmd_ve(args):
+    """Run the VoiceEncoder + S3 Tokenizer conversion."""
+    model_dir = Path(args.model_dir)
+    if not model_dir.is_dir():
+        print(f"Error: {model_dir} is not a directory")
+        sys.exit(1)
+
+    ve_path = args.ve_model or str(find_checkpoint(model_dir, ["ve"], "Voice Encoder"))
+    s3gen_path = args.s3gen_model or str(
+        find_checkpoint(model_dir, ["s3gen_meanflow", "s3gen"], "S3Gen")
+    )
+    t3_path = args.t3_model or str(find_checkpoint(model_dir, ["t3_turbo", "t3"], "T3"))
+
+    print(f"VE checkpoint:    {ve_path}")
+    print(f"S3Gen checkpoint: {s3gen_path}  (S3Tok weights live under tokenizer.*)")
+    print(f"T3 checkpoint:    {t3_path}    (cond_enc weights live under cond_enc.*)")
+
+    out_ve = Path(args.output) if args.output else Path(os.getcwd()) / "voice_encoder.gguf"
+
+    try:
+        ve_sd = load_state_dict(ve_path)
+        s3gen_sd = load_state_dict(s3gen_path)
+        t3_sd = load_state_dict(t3_path)
+        convert_voice_encoder_gguf(ve_sd, s3gen_sd, t3_sd, str(out_ve))
+
+        size = os.path.getsize(out_ve)
+        print(f"\nOutput: {out_ve}")
+        print(f"Size:   {size:,} bytes ({size / (1024**2):.1f} MB)")
+        print("Voice encoder conversion completed successfully.")
+    except Exception as exc:
+        print(f"\nError converting voice encoder: {exc}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
 def find_checkpoint(model_dir: Path, prefixes: list[str], label: str) -> Path:
     """Find a .safetensors or .pth file matching one of the given prefixes."""
     for prefix in prefixes:
@@ -788,9 +1192,11 @@ def cmd_all(args):
 
     t3_path = args.t3_model or str(find_checkpoint(model_dir, ["t3_turbo", "t3"], "T3"))
     s3gen_path = args.s3gen_model or str(find_checkpoint(model_dir, ["s3gen_meanflow"], "S3Gen"))
+    ve_path = args.ve_model or str(find_checkpoint(model_dir, ["ve"], "Voice Encoder"))
 
     print(f"T3 checkpoint:    {t3_path}")
     print(f"S3Gen checkpoint: {s3gen_path}")
+    print(f"VE checkpoint:    {ve_path}")
 
     # Reuse cmd_t3 and cmd_s3gen by building compatible args namespaces
     class T3Args:
@@ -807,6 +1213,14 @@ def cmd_all(args):
         quantize = args.s3gen_quantize or args.quantize
         output = args.output_s3gen
     cmd_s3gen(S3Args())
+
+    class VEArgs:
+        model_dir = str(args.model_dir)
+        ve_model = ve_path
+        s3gen_model = s3gen_path
+        t3_model = t3_path
+        output = args.output_ve
+    cmd_ve(VEArgs())
 
     print(f"\n{'='*60}")
     print("All conversions completed.")
@@ -828,6 +1242,8 @@ def main():
         help="Override T3 checkpoint path (default: auto-detect in model_dir)")
     p_all.add_argument("--s3gen-model", default=None,
         help="Override S3Gen checkpoint path (default: auto-detect in model_dir)")
+    p_all.add_argument("--ve-model", default=None,
+        help="Override Voice Encoder checkpoint path (default: auto-detect in model_dir)")
     p_all.add_argument("--quantize", "-q", default=None,
         choices=["q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "f16", "f32"],
         help="Quantization type for both models (default: f16 for T3, f32 for S3Gen)")
@@ -840,6 +1256,8 @@ def main():
         help="Output backbone + tokenizer GGUF")
     p_all.add_argument("--output-s3gen", default=None,
         help="Output S3Gen GGUF")
+    p_all.add_argument("--output-ve", default=None,
+        help="Output voice encoder GGUF (default: voice_encoder.gguf)")
     p_all.add_argument("--all-f32", action="store_true",
         help="Use F32 for all T3 backbone tensors")
 
@@ -872,6 +1290,22 @@ def main():
     p_s3.add_argument("--output", "-o", default=None,
         help="Output GGUF path (default: S3Gen-<params>-<quant>.gguf)")
 
+    # --- ve subcommand ---
+    p_ve = subparsers.add_parser("ve",
+        help="Convert VoiceEncoder + S3TokenizerV2 to voice_encoder.gguf")
+    p_ve.add_argument("model_dir",
+        help="Path to model directory (e.g. chatterbox-turbo/). "
+             "Auto-discovers ve*.safetensors and s3gen*.safetensors")
+    p_ve.add_argument("--ve-model", default=None,
+        help="Override Voice Encoder checkpoint path (default: auto-detect)")
+    p_ve.add_argument("--s3gen-model", default=None,
+        help="Override S3Gen checkpoint path (default: auto-detect)")
+    p_ve.add_argument("--t3-model", default=None,
+        help="Override T3 checkpoint path (default: auto-detect). "
+             "Needed to extract cond_enc.spkr_enc weights.")
+    p_ve.add_argument("--output", "-o", default=None,
+        help="Output GGUF path (default: voice_encoder.gguf)")
+
     args = parser.parse_args()
 
     if args.command == "all":
@@ -880,6 +1314,8 @@ def main():
         cmd_t3(args)
     elif args.command == "s3gen":
         cmd_s3gen(args)
+    elif args.command == "ve":
+        cmd_ve(args)
 
 
 if __name__ == "__main__":

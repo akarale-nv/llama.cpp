@@ -337,6 +337,10 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
             if (logits_last && is_last_token) {
                 text_batch.logits[text_batch.n_tokens - 1] = true;
             }
+            // TODO: we need to add some mechanism here such that we don't call llama_decode here for chatterbox
+            // because we want the text tokens to be converted to embeddings and then concatenated 
+            // with speaker embeddings and speech embeddings all of which will be contained in 
+            // embd of a llama_batch and call llama_decode on that
             ret = llama_decode(lctx, text_batch);
             if (ret != 0) {
                 LOG_ERR("failed to decode text\n");
@@ -353,6 +357,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         LOG_INF("encoding %s slice...\n", name);
 
         ret = mtmd_encode_chunk(ctx, chunk);
+        // push the embedding created in mtmd_encode_chunk in mtmd_context->image_embd_v
         if (ret != 0) {
             LOG_ERR("failed to encode %s slice\n", name);
             llama_batch_free(text_batch);
@@ -362,6 +367,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
         float * embd = mtmd_get_output_embd(ctx);
+        // we don't want to call mtmd_helper_decode_image_chunk for chatterbox as we want to concat these embeddings with token embeddings
         ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);

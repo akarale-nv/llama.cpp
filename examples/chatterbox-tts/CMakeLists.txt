@@ -11,6 +11,7 @@ add_executable(${TARGET}
     s3gen_ops.cpp
     s3Mel2Wav.cpp
     s3Token2Mel.cpp
+    voice_encoder.cpp
 )
 
 target_link_libraries(${TARGET} PRIVATE llama common ${CMAKE_THREAD_LIBS_INIT})

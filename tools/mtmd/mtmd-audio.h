@@ -13,7 +13,7 @@ struct mtmd_audio_mel {
     int n_len;
     int n_len_org;
     int n_mel;
-
+    // TODO: add a string name field to identify type of mel if voice encoders create multiple types of mels like chatterbox
     std::vector<float> data;
 };
 
@@ -76,6 +76,8 @@ struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
   private:
     mtmd_audio_cache cache;
 };
+
+// TODO: add mtmd_audio_preprocessor_chatterbox which will be responsible for creating 2 types of mtmd_audio_mel structs. Their type will be written in the string inside the mtmd_audio_mel struct
 
 //
 // streaming ISTFT - converts spectrogram frames back to audio one frame at a time

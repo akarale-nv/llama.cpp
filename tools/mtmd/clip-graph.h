@@ -34,6 +34,7 @@ struct clip_graph {
 
     ggml_context_ptr ctx0_ptr;
     ggml_context * ctx0;
+    // TODO: we may have to convert this to array of ggml_cgraph* to support multiple encodings created from input audio like chatterbox does
     ggml_cgraph * gf;
 
     clip_graph(clip_ctx * ctx, const clip_image_f32 & img);

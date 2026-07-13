@@ -17,6 +17,7 @@
 #include "gguf.h"
 #include "ggml.h"
 #include "s3gen.h"
+#include "voice_encoder.h"
 
 #include <cassert>
 #include <chrono>
@@ -26,6 +27,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -151,11 +153,11 @@ static std::vector<uint8_t> base64_decode(const std::string & in) {
 }
 
 struct SpeakerEmb {
-    std::vector<float> data;     // [len_cond * N_EMBD] — T3 prefill conditioning
+    std::vector<float> data;     // [len_cond * N_EMBD] — T3 prefill conditioning    // TODO: calculate by reference voice encoder
     int len_cond = 0;
-    std::vector<float> spk_emb;  // [192] — raw ECAPA speaker embedding for S3Gen
-    std::vector<int32_t> prompt_tokens;   // prompt token IDs for S3Gen voice cloning
-    std::vector<float>   prompt_features; // [mel_ch * prompt_feat_frames] flat, channels-first
+    std::vector<float> spk_emb;  // [192] — raw ECAPA speaker embedding for S3Gen    // TODO: calculate in s3gen 
+    std::vector<int32_t> prompt_tokens;   // prompt token IDs for S3Gen voice cloning     // TODO: calculate by reference voice encoder
+    std::vector<float>   prompt_features; // [mel_ch * prompt_feat_frames] flat, channels-first  // TODO: calculate in s3gen
     int prompt_feat_frames = 0;           // number of mel frames in prompt_features
 };
 
@@ -392,6 +394,9 @@ static void print_usage(const char * argv0) {
         "  --model-llama PATH   T3 backbone model  (t3_backbone_f16.gguf)\n"
         "  --prompt TEXT        Text to synthesise\n"
         "  --cond-emb PATH      Speaker conditioning JSON\n"
+        "\nReference audio encoder (optional — rebuilds cond_emb + prompt_tokens from a WAV):\n"
+        "  --voice-encoder PATH voice_encoder.gguf (VE + cond_enc + S3TokenizerV2 weights)\n"
+        "  --reference-wav PATH Reference speaker WAV (16 kHz mono PCM16 or float32)\n"
         "\nVocoder (optional — enables audio output):\n"
         "  --s3gen PATH         S3Gen vocoder model (s3gen_f16.gguf)\n"
         "  --output PATH        Output WAV file (default: output.wav)\n"
@@ -413,7 +418,9 @@ struct Args {
     std::string emb_model_path;
     std::string backbone_path;
     std::string prompt;
-    std::string cond_emb_path;
+    std::string voice_encoder_path;
+    std::string reference_wav_path;
+    std::string cond_emb_path; // to be fully replaced by voice encoder and s3gen  
     std::string s3gen_path;
     std::string output_path   = "output.wav";
     std::string tokens_path;
@@ -436,6 +443,8 @@ static bool parse_args(int argc, char ** argv, Args & a) {
         STR_ARG("-m",            emb_model_path)
         STR_ARG("--model-llama", backbone_path)
         STR_ARG("--prompt",      prompt)
+        STR_ARG("--voice-encoder", voice_encoder_path)
+        STR_ARG("--reference-wav", reference_wav_path)
         STR_ARG("--cond-emb",    cond_emb_path)
         STR_ARG("--s3gen",       s3gen_path)
         STR_ARG("--output",      output_path)
@@ -461,8 +470,8 @@ static bool parse_args(int argc, char ** argv, Args & a) {
             return false;
         }
     } else {
-        if (a.cond_emb_path.empty()) {
-            fprintf(stderr, "Error: --cond-emb is required with --tokens-in\n");
+        if (a.cond_emb_path.empty() || a.voice_encoder_path.empty()) {
+            fprintf(stderr, "Error: --cond-emb and --voice-encoder is required with --tokens-in\n");
             return false;
         }
     }
@@ -593,11 +602,72 @@ int main(int argc, char ** argv) {
     // ------------------------------------------------------------------
     // 3. Load speaker conditioning
     // ------------------------------------------------------------------
+    //
+    // Phase 1: prompt_tokens, prompt_feat, and spk_emb still come from the JSON.
+    // Row 0 of cond_emb (the 1024-dim speaker conditioning slot) can be
+    // overridden at runtime by running the Voice Encoder + cond_enc.spkr_enc
+    // over a reference WAV. Pass --voice-encoder <voice_encoder.gguf> together
+    // with --reference-wav <path.wav> to enable this.
     SpeakerEmb spk;
     fprintf(stderr, "Loading speaker emb: %s\n", args.cond_emb_path.c_str());
     if (!load_speaker_emb(args.cond_emb_path.c_str(), spk)) {
         llama_model_free(vocab_model);
         return 1;
+    }
+
+    if (!args.voice_encoder_path.empty() && !args.reference_wav_path.empty()) {
+        fprintf(stderr, "\n[voice-encoder] Encoding reference WAV %s using %s\n",
+                args.reference_wav_path.c_str(), args.voice_encoder_path.c_str());
+        VoiceEncoder ve;
+        if (!ve.init_backend() || !ve.load_model(args.voice_encoder_path)) {
+            fprintf(stderr, "[voice-encoder] failed to init / load — keeping JSON conditioning.\n");
+        } else {
+            std::map<std::string, staged_io> ve_out;
+            if (!ve.encode_reference(args.reference_wav_path, ve_out)) {
+                fprintf(stderr, "[voice-encoder] encode_reference failed — keeping JSON conditioning.\n");
+            } else {
+                auto it_c = ve_out.find("cond_spkr");
+                auto it_t = ve_out.find("prompt_tokens");
+                if (it_c == ve_out.end() || it_t == ve_out.end()) {
+                    fprintf(stderr, "[voice-encoder] missing output(s) — keeping JSON conditioning.\n");
+                } else if ((int)it_c->second.shape[0] != N_EMBD) {
+                    fprintf(stderr, "[voice-encoder] cond_spkr size %d != %d — keeping JSON.\n",
+                            (int)it_c->second.shape[0], N_EMBD);
+                } else {
+                    const int T_prime  = (int)it_t->second.shape[0];
+                    const int len_cond = 1 + T_prime;
+
+                    // Rebuild cond_emb from encoder outputs:
+                    //   row 0        = 1024-d speaker conditioning (VE + cond_enc.spkr_enc)
+                    //   rows 1..T'   = speech_emb[cond_prompt_tokens[t]]
+                    // NOTE: spk.prompt_tokens is for S3Gen (loaded from JSON,
+                    // typically 250 tokens capped to ~10 s of audio). It's a
+                    // DIFFERENT set of tokens from the T3 cond_prompt_speech_tokens
+                    // computed here (typically the full T' ≈ 25*wav_duration
+                    // tokens). Leaving spk.prompt_tokens untouched so S3Gen
+                    // still uses the JSON's reference tokens.
+                    spk.data.assign((size_t)len_cond * N_EMBD, 0.0f);
+                    spk.len_cond = len_cond;
+
+                    std::memcpy(spk.data.data(), it_c->second.as<float>(),
+                                N_EMBD * sizeof(float));
+
+                    const int32_t * pt = it_t->second.as<int32_t>();
+                    int n_bad = 0;
+                    for (int t = 0; t < T_prime; ++t) {
+                        int32_t id = pt[t];
+                        if (id < 0 || id >= SPEECH_SOS) { n_bad++; id = 0; }
+                        std::memcpy(spk.data.data() + (size_t)(1 + t) * N_EMBD,
+                                    emb.speech_emb.data() + (size_t)id * N_EMBD,
+                                    N_EMBD * sizeof(float));
+                    }
+                    if (n_bad) fprintf(stderr, "[voice-encoder] warning: %d speech IDs were out of range and clamped to 0\n", n_bad);
+                    fprintf(stderr, "[voice-encoder] Rebuilt T3 cond_emb (%d rows) from reference WAV; "
+                                    "S3Gen prompt_tokens (%zu) still from JSON.\n",
+                            len_cond, spk.prompt_tokens.size());
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------

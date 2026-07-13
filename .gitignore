@@ -143,3 +143,5 @@ poetry.toml
 /.windsurf/
 # emscripten
 a.out.*
+
+/examples/chatterbox-tts/debug/

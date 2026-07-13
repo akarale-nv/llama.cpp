@@ -388,7 +388,7 @@ struct clip_image_u8_batch {
 struct clip_image_f32_batch {
     std::vector<clip_image_f32_ptr> entries;
     bool is_audio = false;
-
+    // TODO: may add a string name to identify which mels it is carrying for models that process multiple mels like chatterbox
     // for llava-uhd style models, we need to know the grid size
     // note: entries.size() == grid_x * grid_y + 1 (one overview image)
     int grid_x = 0;

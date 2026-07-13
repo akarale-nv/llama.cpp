@@ -123,7 +123,8 @@ struct mtmd_context {
     struct clip_ctx * ctx_v; // vision
     struct clip_ctx * ctx_a; // audio
     const struct llama_model * text_model;
-    std::vector<float> image_embd_v; // image embedding vector
+    // TODO: may need to convert to vector<vector<float>> to store multiple embeddings created by some models like chatterbox 
+    std::vector<float> image_embd_v; // image embedding vector 
 
     bool print_timings;
     int n_threads;
@@ -356,6 +357,7 @@ struct mtmd_context {
             case PROJECTOR_TYPE_LFM2A:
                 audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
                 break;
+            // TODO: Add PROJECTOR_TYPE_CHATTERBOX
             default:
                 GGML_ABORT("unsupported audio projector type");
         }
@@ -701,6 +703,7 @@ struct mtmd_tokenizer {
             const float * samples = (const float *)bitmap->data.data();
             size_t n_samples = bitmap->data.size() / sizeof(float);
             bool ok = ctx->audio_preproc->preprocess(samples, n_samples, mel_spec_chunks);
+            // mel_spec_chunks will carry exactly two mtmd_audio_mel structs each corresponding to the 2 mels that we need to create for chatterbox and each will have a unique name field. other models can have any number of mels created because of this
             if (!ok) {
                 LOG_ERR("Unable to preprocess audio\n");
                 return 2;
@@ -731,6 +734,7 @@ struct mtmd_tokenizer {
                     {}, // text tokens
                     nullptr, // image tokens
                     std::move(audio_tokens),
+                    // the string field from mtmd_audio_mel should be copied over to clip_image_f32/mtmd_input_chunk structs as well so later when it is being fed to clip_image_batch_encode this name field can be used to create the right graph based on the mel type 
                 };
                 cur.entries.emplace_back(std::move(chunk));
             }
@@ -838,6 +842,7 @@ int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
             ctx->n_threads,
             &chunk->tokens_audio->batch_f32,
             ctx->image_embd_v.data());
+        // TODO: for chatterbox we will calculate 2 outputs from 2 graphs here and each will be stored in image_embd_v[0] and image_embd_v[1]. Some mechanism will have to be implemented that chooses image_embd_v[i] based on the mtmd_input_chunk type or batch_f32 type
         return ok ? 0 : 1;
     }
 

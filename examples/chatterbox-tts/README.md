@@ -45,12 +45,13 @@ python examples/chatterbox-tts/convert_chatterbox_to_gguf.py all \
     chatterbox-turbo/
 ```
 
-Output (three GGUF files):
+Output (four GGUF files):
 - `t3_embeddings.gguf` -- text/speech embeddings and positional embeddings
 - `chatterbox_llama_backbone_tts_f16.gguf` -- the 24-layer GPT-2 transformer backbone + tokenizer
 - `S3Gen-<params>-F16.gguf` -- the flow-matching vocoder (token to mel to waveform)
+- `voice_encoder.gguf` -- reference VoiceEncoder (LSTM speaker encoder) + S3TokenizerV2, used at runtime to compute the speaker embedding and reference speech-token IDs from a reference WAV
 
-You can also convert each model separately using the `t3` and `s3gen` subcommands (see [Conversion script reference](#conversion-script-reference)).
+You can also convert each model separately using the `t3`, `s3gen`, and `ve` subcommands (see [Conversion script reference](#conversion-script-reference)).
 
 ### 4. Build
 
@@ -135,7 +136,7 @@ All conversions are handled by a single script with subcommands.
 
 ### convert_chatterbox_to_gguf.py all
 
-Auto-discovers T3 and S3Gen checkpoints in a model directory and converts both, producing three GGUF files. Looks for `t3_turbo*.safetensors` and `s3gen*.safetensors` by default.
+Auto-discovers T3, S3Gen and Voice Encoder checkpoints in a model directory and converts them all, producing four GGUF files. Looks for `t3_turbo*.safetensors`, `s3gen*.safetensors`, and `ve*.safetensors` by default.
 
 ```
 python convert_chatterbox_to_gguf.py all <model_dir> [options]
@@ -144,11 +145,13 @@ python convert_chatterbox_to_gguf.py all <model_dir> [options]
 
   --t3-model PATH             Override T3 checkpoint path (default: auto-detect)
   --s3gen-model PATH          Override S3Gen checkpoint path (default: auto-detect)
+  --ve-model PATH             Override Voice Encoder checkpoint path (default: auto-detect)
   --quantize TYPE             Quantization for both models (default: f16 for T3, f32 for S3Gen)
   --s3gen-quantize TYPE       Override quantization for S3Gen only
   --output-embeddings PATH    Output embeddings GGUF (default: t3_embeddings.gguf)
   --output-backbone PATH      Output backbone + tokenizer GGUF
   --output-s3gen PATH         Output S3Gen GGUF
+  --output-ve PATH            Output voice encoder GGUF (default: voice_encoder.gguf)
   --all-f32                   Force F32 for all T3 backbone tensors
 ```
 
@@ -174,6 +177,27 @@ python convert_chatterbox_to_gguf.py t3 <model_path> [options]
   --output-backbone PATH      Output backbone + tokenizer GGUF (default: chatterbox_llama_backbone_tts_<quant>.gguf)
   --quantize TYPE             q4_0, q4_1, q5_0, q5_1, q8_0, f16, f32 (default: f16)
   --all-f32                   Force F32 for all backbone tensors
+```
+
+### convert_chatterbox_to_gguf.py ve
+
+Converts the reference VoiceEncoder (`ve.safetensors`) and the S3TokenizerV2 weights
+(extracted from the S3Gen checkpoint under `tokenizer.*`) to a single GGUF file used
+by the C++ runtime to compute the speaker embedding and reference speech-token IDs
+from a reference WAV at inference time.
+
+Tensors use the upstream mmproj `a.*` audio naming convention and KV pairs use
+`clip.audio.*` (S3Tok hparams) and `clip.audio.ve.*` (VE hparams).
+
+```
+python convert_chatterbox_to_gguf.py ve <model_dir> [options]
+
+  model_dir                   Path to model directory (e.g. chatterbox-turbo/).
+                              Auto-discovers ve*.safetensors and s3gen*.safetensors
+
+  --ve-model PATH             Override Voice Encoder checkpoint path (default: auto-detect)
+  --s3gen-model PATH          Override S3Gen checkpoint path (default: auto-detect)
+  --output PATH               Output GGUF path (default: voice_encoder.gguf)
 ```
 
 ### convert_chatterbox_to_gguf.py s3gen

@@ -886,7 +886,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             GGML_ABORT("missing cgraph builder");
     }
 
-    return builder->build();
+    return builder->build(); // TODO: this should return multiple cgraphs 
 }
 
 //
@@ -3646,6 +3646,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     // build the inference graph
     ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
+    // TODO: Put some logic here to build 2 clip encoder graphs
     ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
 
     // set inputs
@@ -3738,6 +3739,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     // set input per projector
+    // TODO: may have to include 2 new project types or some mechanism to set the inputs necessary for multiple graphs(maybe an if block that sets the input based on the name string we introduce in clip_image_f32_batch)
     switch (ctx->model.proj_type) {
         case PROJECTOR_TYPE_MINICPMV:
             {
